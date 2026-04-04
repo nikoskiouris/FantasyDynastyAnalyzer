@@ -5,6 +5,10 @@ const PLAYERS_CACHE_TTL_MS = 1000 * 60 * 60 * 24;
 const DEFAULT_FAIRNESS_PCT = 20;
 const OUTGOING_POOL_LIMIT = 18;
 const MIN_OUTGOING_ASSET_VALUE = 450;
+const LINEUP_EXACT_SOLVER_CANDIDATE_LIMIT = 14;
+const LINEUP_EXACT_SOLVER_SLOT_LIMIT = 11;
+const LINEUP_CANDIDATE_FLOOR = 6;
+const LINEUP_CANDIDATE_BUFFER = 2;
 const KTC_RAW_BASE = 0.10;
 const KTC_RAW_ELITE_WEIGHT = 0.04;
 const KTC_RAW_TRADE_WEIGHT = 0.09;
@@ -1478,8 +1482,9 @@ function buildOptimalStartingLineup(assets, starterSlots, values) {
       return getSlotFlexWeight(left.slot) - getSlotFlexWeight(right.slot);
     });
 
-  const memo = new Map();
-  const bestPlan = chooseBestLineup(slotEntries, candidates, 0, 0n, memo);
+  const bestPlan = shouldUseExactLineupSolver(slotEntries, candidates)
+    ? chooseBestLineup(slotEntries, candidates, 0, 0n, new Map())
+    : chooseGreedyLineup(slotEntries, candidates);
   const starters = bestPlan.picks
     .map((candidateIndex, slotIndex) => ({
       slot: slotEntries[slotIndex].slot,
@@ -1500,6 +1505,11 @@ function buildOptimalStartingLineup(assets, starterSlots, values) {
     benchAssets,
     benchValue: Math.round(benchAssets.reduce((sum, asset) => sum + getAssetValue(asset, values), 0)),
   };
+}
+
+function shouldUseExactLineupSolver(slotEntries, candidates) {
+  return slotEntries.length <= LINEUP_EXACT_SOLVER_SLOT_LIMIT
+    && candidates.length <= LINEUP_EXACT_SOLVER_CANDIDATE_LIMIT;
 }
 
 function chooseBestLineup(slotEntries, candidates, slotIndex, usedMask, memo) {
@@ -1544,9 +1554,40 @@ function chooseBestLineup(slotEntries, candidates, slotIndex, usedMask, memo) {
   return bestResult;
 }
 
+function chooseGreedyLineup(slotEntries, candidates) {
+  const usedCandidateIndexes = new Set();
+  const picks = [];
+  let score = 0;
+
+  for (const slotEntry of slotEntries) {
+    let bestCandidateIndex = null;
+    for (let candidateIndex = 0; candidateIndex < candidates.length; candidateIndex += 1) {
+      if (usedCandidateIndexes.has(candidateIndex)) continue;
+      if (!assetCanFillRosterSlot(candidates[candidateIndex].asset, slotEntry.slot)) continue;
+      if (bestCandidateIndex == null || candidates[candidateIndex].value > candidates[bestCandidateIndex].value) {
+        bestCandidateIndex = candidateIndex;
+      }
+    }
+
+    if (bestCandidateIndex == null) {
+      picks.push(null);
+      continue;
+    }
+
+    usedCandidateIndexes.add(bestCandidateIndex);
+    picks.push(bestCandidateIndex);
+    score += candidates[bestCandidateIndex].value;
+  }
+
+  return { score, picks };
+}
+
 function buildLineupCandidatePool(playerEntries, starterSlots) {
   const candidateMap = new Map();
-  const maxPerSlot = Math.min(playerEntries.length, Math.max(10, starterSlots.length + 4));
+  const maxPerSlot = Math.min(
+    playerEntries.length,
+    Math.max(LINEUP_CANDIDATE_FLOOR, starterSlots.length + LINEUP_CANDIDATE_BUFFER)
+  );
 
   starterSlots.forEach((slot) => {
     playerEntries
