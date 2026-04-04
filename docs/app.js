@@ -2,6 +2,11 @@ const API_BASE = "https://api.sleeper.app/v1";
 const SAMPLE_VALUES_PATH = "./data/ktc_values_sample.csv";
 const PLAYERS_CACHE_KEY = "fda_players_nfl_cache_v1";
 const PLAYERS_CACHE_TTL_MS = 1000 * 60 * 60 * 24;
+const KTC_RAW_BASE = 0.10;
+const KTC_RAW_ELITE_WEIGHT = 0.04;
+const KTC_RAW_TRADE_WEIGHT = 0.09;
+const KTC_RAW_DEPTH_WEIGHT = 0.24;
+const KTC_GLOBAL_MAX_FALLBACK = 9999;
 
 const state = {
   leagueId: "",
@@ -335,7 +340,7 @@ async function generateTradeIdeas() {
   el.resultsSubtitle.textContent = `${meRoster.manager.displayName} acquiring ${state.targetAsset.name} from ${theirRoster.manager.displayName}`;
 
   if (ideas.length === 0) {
-    el.resultsList.innerHTML = `<p class="muted">No fair offers found with current settings/value data. Increase fairness % or change target.</p>`;
+    el.resultsList.innerHTML = `<p class="muted">No fair offers found once KTC package adjustment is applied. Increase fairness % or change target.</p>`;
     return;
   }
 
@@ -346,7 +351,10 @@ async function generateTradeIdeas() {
         <h3>Idea ${idx + 1}</h3>
         <p><strong>You send:</strong> ${idea.myAssets.map((a) => a.name).join(", ")}</p>
         <p><strong>You receive:</strong> ${idea.theirAssets.map((a) => a.name).join(", ")}</p>
-        <p class="muted">Value: you ${idea.myValue} vs them ${idea.theirValue} (diff ${idea.pctDiff}%)</p>
+        <p class="muted">Base value: you ${idea.myBaseValue} vs them ${idea.theirBaseValue}</p>
+        <p class="muted">Package adjustment: ${formatPackageAdjustment(idea)}</p>
+        <p class="muted">KTC-style total: you ${idea.myAdjustedValue} vs them ${idea.theirAdjustedValue} (diff ${idea.pctDiff}%)</p>
+        <p class="muted">Add value to even: ${idea.evenValue}</p>
       </article>`
     )
     .join("");
@@ -356,7 +364,8 @@ function suggestTrades({ myRoster, theirRoster, targetAsset, values, fairnessPct
   const targetValue = getAssetValue(targetAsset, values);
   if (!targetValue) return [];
 
-  const valuedAssets = myRoster.assets.filter((a) => getAssetValue(a, values));
+  const globalMaxValue = getGlobalMaxPlayerValue(values, targetValue);
+  const valuedAssets = myRoster.assets.filter((asset) => Number.isFinite(getAssetValue(asset, values)));
   const combos = [];
 
   valuedAssets.forEach((asset) => combos.push([asset]));
@@ -375,14 +384,18 @@ function suggestTrades({ myRoster, theirRoster, targetAsset, values, fairnessPct
 
   const rawIdeas = [];
   for (const myAssets of combos) {
-    const myValue = myAssets.reduce((sum, a) => sum + getAssetValue(a, values), 0);
-    const pctDiff = Math.abs(myValue - targetValue) / Math.max(myValue, targetValue) * 100;
+    const myValues = myAssets.map((asset) => getAssetValue(asset, values));
+    const packageResult = calculatePackageAdjustment({
+      myValues,
+      theirValues: [targetValue],
+      globalMaxValue,
+    });
+    const pctDiff = calculatePctDiff(packageResult.myAdjustedValue, packageResult.theirAdjustedValue);
     if (pctDiff <= fairnessPct) {
       rawIdeas.push({
         myAssets,
         theirAssets: [targetAsset],
-        myValue,
-        theirValue: targetValue,
+        ...packageResult,
         pctDiff: Number(pctDiff.toFixed(2)),
       });
     }
@@ -391,7 +404,7 @@ function suggestTrades({ myRoster, theirRoster, targetAsset, values, fairnessPct
   const deduped = [];
   const seen = new Set();
   for (const idea of rawIdeas) {
-    const key = idea.myAssets.map((a) => a.assetId).sort().join("|");
+    const key = idea.myAssets.map((asset) => asset.assetId).sort().join("|");
     if (seen.has(key)) continue;
     seen.add(key);
     deduped.push(idea);
@@ -400,10 +413,128 @@ function suggestTrades({ myRoster, theirRoster, targetAsset, values, fairnessPct
   deduped.sort((a, b) => {
     const byDiff = Math.abs(a.pctDiff) - Math.abs(b.pctDiff);
     if (byDiff !== 0) return byDiff;
+
+    const byEvenValue = a.evenValue - b.evenValue;
+    if (byEvenValue !== 0) return byEvenValue;
+
     return a.myAssets.length - b.myAssets.length;
   });
 
   return deduped.slice(0, maxResults);
+}
+
+function formatPackageAdjustment(idea) {
+  if (!idea.packageAdjustment) return "none";
+  const side = idea.packageAdjustmentSide === "my" ? "your side" : "their side";
+  return `+${idea.packageAdjustment} on ${side}`;
+}
+
+function calculatePctDiff(a, b) {
+  if (!a || !b) return 100;
+  return Math.abs(a - b) / Math.max(a, b) * 100;
+}
+
+function getGlobalMaxPlayerValue(values, tradeMaxValue = 0) {
+  let maxValue = Math.max(KTC_GLOBAL_MAX_FALLBACK, tradeMaxValue);
+  for (const value of Object.values(values || {})) {
+    if (Number.isFinite(value) && value > maxValue) {
+      maxValue = value;
+    }
+  }
+  return maxValue;
+}
+
+function calculateKtcRawAdjustment(playerValue, tradeMaxValue, globalMaxValue) {
+  if (!Number.isFinite(playerValue) || playerValue <= 0 || !Number.isFinite(tradeMaxValue) || tradeMaxValue <= 0) return 0;
+
+  return playerValue * (
+    KTC_RAW_BASE
+      + KTC_RAW_ELITE_WEIGHT * (playerValue / globalMaxValue) ** 8
+      + KTC_RAW_TRADE_WEIGHT * (playerValue / tradeMaxValue) ** 1.3
+      + KTC_RAW_DEPTH_WEIGHT * (playerValue / (globalMaxValue + 2000)) ** 1.28
+  );
+}
+
+function findEvenValueForRawGap(targetRawGap, tradeMaxValue, globalMaxValue) {
+  if (!Number.isFinite(targetRawGap) || targetRawGap <= 0) return 0;
+
+  const maxReachableRaw = calculateKtcRawAdjustment(globalMaxValue, globalMaxValue, globalMaxValue);
+  if (targetRawGap >= maxReachableRaw) {
+    return Math.round(globalMaxValue);
+  }
+
+  let low = 0;
+  let high = globalMaxValue;
+  for (let i = 0; i < 50; i++) {
+    const mid = (low + high) / 2;
+    const rawValue = calculateKtcRawAdjustment(mid, Math.max(tradeMaxValue, mid), globalMaxValue);
+    if (rawValue < targetRawGap) {
+      low = mid;
+    } else {
+      high = mid;
+    }
+  }
+
+  return Math.max(0, Math.round(high));
+}
+
+function calculatePackageAdjustment({ myValues, theirValues, globalMaxValue }) {
+  const myBaseValue = myValues.reduce((sum, value) => sum + value, 0);
+  const theirBaseValue = theirValues.reduce((sum, value) => sum + value, 0);
+  const tradeMaxValue = Math.max(0, ...myValues, ...theirValues);
+
+  if (!tradeMaxValue) {
+    return {
+      myBaseValue,
+      theirBaseValue,
+      myAdjustedValue: myBaseValue,
+      theirAdjustedValue: theirBaseValue,
+      packageAdjustment: 0,
+      packageAdjustmentSide: null,
+      evenValue: 0,
+    };
+  }
+
+  const myRawValue = myValues.reduce((sum, value) => sum + calculateKtcRawAdjustment(value, tradeMaxValue, globalMaxValue), 0);
+  const theirRawValue = theirValues.reduce((sum, value) => sum + calculateKtcRawAdjustment(value, tradeMaxValue, globalMaxValue), 0);
+
+  if (Math.abs(myRawValue - theirRawValue) < 1e-6) {
+    return {
+      myBaseValue,
+      theirBaseValue,
+      myAdjustedValue: myBaseValue,
+      theirAdjustedValue: theirBaseValue,
+      packageAdjustment: 0,
+      packageAdjustmentSide: null,
+      evenValue: 0,
+    };
+  }
+
+  if (myRawValue > theirRawValue) {
+    const evenValue = findEvenValueForRawGap(myRawValue - theirRawValue, tradeMaxValue, globalMaxValue);
+    const packageAdjustment = Math.max(0, Math.round(theirBaseValue + evenValue - myBaseValue));
+    return {
+      myBaseValue,
+      theirBaseValue,
+      myAdjustedValue: myBaseValue + packageAdjustment,
+      theirAdjustedValue: theirBaseValue,
+      packageAdjustment,
+      packageAdjustmentSide: packageAdjustment > 0 ? "my" : null,
+      evenValue,
+    };
+  }
+
+  const evenValue = findEvenValueForRawGap(theirRawValue - myRawValue, tradeMaxValue, globalMaxValue);
+  const packageAdjustment = Math.max(0, Math.round(myBaseValue + evenValue - theirBaseValue));
+  return {
+    myBaseValue,
+    theirBaseValue,
+    myAdjustedValue: myBaseValue,
+    theirAdjustedValue: theirBaseValue + packageAdjustment,
+    packageAdjustment,
+    packageAdjustmentSide: packageAdjustment > 0 ? "their" : null,
+    evenValue,
+  };
 }
 
 function getAssetValue(asset, values) {
