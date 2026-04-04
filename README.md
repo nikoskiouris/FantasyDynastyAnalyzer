@@ -12,9 +12,10 @@ The full UI lives in `docs/` and is deployable on GitHub Pages.
 ### User flow in the website
 1. Enter Sleeper League ID.
 2. Pick which manager you are.
-3. Search/select the player you want from another roster.
-4. Optionally allow the other manager to include extra players/picks with your target player.
-5. Generate 3–4 trade ideas based on valuation data.
+3. Search/select the player or pick you want from another roster.
+4. Build your outgoing pool by allowing `players`, `picks`, or both, and optionally hand-pick exact assets you are willing to move.
+5. Tell the app how your league behaves with Trade Lab settings like pick fever, position premiums, youth obsession, core protection, consolidation preference, and ceiling chasing.
+6. Generate trade ideas that blend KTC-style fairness with a league-market fit score and a suggested opening pitch.
 
 ### Value source behavior
 - Uses optional JSON endpoint if you provide one (shape: `[{"asset_id":"player:8155","value":8200}]`).

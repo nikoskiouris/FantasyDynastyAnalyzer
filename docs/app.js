@@ -22,6 +22,15 @@ const state = {
   meRosterId: null,
   targetAsset: null,
   values: {},
+  targetFilters: {
+    players: true,
+    picks: false,
+  },
+  outgoingFilters: {
+    players: true,
+    picks: true,
+  },
+  selectedOutgoingAssetIds: new Set(),
 };
 
 const el = {
@@ -35,8 +44,28 @@ const el = {
   identitySection: document.querySelector("#identity-section"),
   meSelect: document.querySelector("#me-select"),
   playerSection: document.querySelector("#player-section"),
+  targetPlayersToggle: document.querySelector("#target-players-toggle"),
+  targetPicksToggle: document.querySelector("#target-picks-toggle"),
   playerSearch: document.querySelector("#player-search"),
   playerResults: document.querySelector("#player-results"),
+  builderSection: document.querySelector("#builder-section"),
+  givePlayersToggle: document.querySelector("#give-players-toggle"),
+  givePicksToggle: document.querySelector("#give-picks-toggle"),
+  myAssetSearch: document.querySelector("#my-asset-search"),
+  myAssetResults: document.querySelector("#my-asset-results"),
+  selectVisibleAssetsBtn: document.querySelector("#select-visible-assets-btn"),
+  clearSelectedAssetsBtn: document.querySelector("#clear-selected-assets-btn"),
+  selectedAssetsSummary: document.querySelector("#selected-assets-summary"),
+  marketSection: document.querySelector("#market-section"),
+  positionPremiumSelect: document.querySelector("#position-premium-select"),
+  tradeVibeSelect: document.querySelector("#trade-vibe-select"),
+  pickPremiumToggle: document.querySelector("#pick-premium-toggle"),
+  youthPremiumToggle: document.querySelector("#youth-premium-toggle"),
+  depthPremiumToggle: document.querySelector("#depth-premium-toggle"),
+  protectCoreToggle: document.querySelector("#protect-core-toggle"),
+  protectFirstsToggle: document.querySelector("#protect-firsts-toggle"),
+  preferConsolidationToggle: document.querySelector("#prefer-consolidation-toggle"),
+  swingBigToggle: document.querySelector("#swing-big-toggle"),
   settingsSection: document.querySelector("#settings-section"),
   fairnessInput: document.querySelector("#fairness-input"),
   maxResultsInput: document.querySelector("#max-results-input"),
@@ -50,16 +79,56 @@ const el = {
 
 el.loadLeagueBtn.addEventListener("click", loadLeague);
 el.copyLeagueIdBtn?.addEventListener("click", copyHelperLeagueId);
-el.playerSearch.addEventListener("input", renderPlayerSearch);
+el.playerSearch.addEventListener("input", () => {
+  invalidateResults();
+  renderPlayerSearch();
+});
+el.targetPlayersToggle?.addEventListener("change", () => updateAssetTypeFilter("target", "players", el.targetPlayersToggle.checked));
+el.targetPicksToggle?.addEventListener("change", () => updateAssetTypeFilter("target", "picks", el.targetPicksToggle.checked));
+el.givePlayersToggle?.addEventListener("change", () => updateAssetTypeFilter("outgoing", "players", el.givePlayersToggle.checked));
+el.givePicksToggle?.addEventListener("change", () => updateAssetTypeFilter("outgoing", "picks", el.givePicksToggle.checked));
+el.myAssetSearch?.addEventListener("input", () => {
+  invalidateResults();
+  renderOutgoingAssetSearch();
+});
+el.selectVisibleAssetsBtn?.addEventListener("click", selectVisibleOutgoingAssets);
+el.clearSelectedAssetsBtn?.addEventListener("click", clearSelectedOutgoingAssets);
+[
+  el.positionPremiumSelect,
+  el.tradeVibeSelect,
+  el.pickPremiumToggle,
+  el.youthPremiumToggle,
+  el.depthPremiumToggle,
+  el.protectCoreToggle,
+  el.protectFirstsToggle,
+  el.preferConsolidationToggle,
+  el.swingBigToggle,
+  el.fairnessInput,
+  el.maxResultsInput,
+  el.ktcUrlInput,
+  el.allowExtraTargetAssetsInput,
+].forEach((input) => {
+  input?.addEventListener("change", () => {
+    invalidateResults();
+    renderOutgoingAssetSearch();
+  });
+});
 el.meSelect.addEventListener("change", () => {
+  invalidateResults();
   state.meRosterId = Number(el.meSelect.value);
   renderPlayerSearch();
+  pruneSelectedOutgoingAssets();
+  renderOutgoingAssetSearch();
 });
 el.generateBtn.addEventListener("click", generateTradeIdeas);
 
 let leagueLoadAnimationTimer = null;
 let leagueLoadStartedAt = 0;
 let copyFeedbackTimer = null;
+
+function invalidateResults() {
+  el.resultsSection.classList.add("hidden");
+}
 
 async function loadLeague() {
   const leagueId = el.leagueId.value.trim();
@@ -70,7 +139,9 @@ async function loadLeague() {
 
   startLeagueLoadingUi();
   state.targetAsset = null;
+  state.selectedOutgoingAssetIds.clear();
   el.resultsList.innerHTML = "";
+  el.resultsSection.classList.add("hidden");
 
   try {
     const { league, users, rosters } = await loadLeagueCoreData(leagueId);
@@ -90,6 +161,8 @@ async function loadLeague() {
     hydrateManagerSelector();
     el.identitySection.classList.remove("hidden");
     el.playerSection.classList.remove("hidden");
+    el.builderSection.classList.remove("hidden");
+    el.marketSection.classList.remove("hidden");
     el.settingsSection.classList.remove("hidden");
     setStatus(`Loaded ${state.leagueName}. Player names are still syncing...`, { loading: true });
 
@@ -102,9 +175,11 @@ async function loadLeague() {
           rosters: state.previousRosters,
         });
         hydrateManagerSelector();
+        renderOutgoingAssetSearch();
         setStatus(`Loaded ${state.leagueName}. Choose your team to continue.`, { ok: true });
       })
       .catch((err) => {
+        renderOutgoingAssetSearch();
         setStatus(
           `Loaded ${state.leagueName}, but could not pull full NFL names (${err.message}). You can still use the app.`,
           { ok: true }
@@ -298,39 +373,268 @@ function hydrateManagerSelector() {
     state.meRosterId = state.normalizedRosters[0].rosterId;
     el.meSelect.value = String(state.normalizedRosters[0].rosterId);
   }
+  pruneSelectedOutgoingAssets();
   renderPlayerSearch();
+  renderOutgoingAssetSearch();
+}
+
+function updateAssetTypeFilter(scope, key, checked) {
+  invalidateResults();
+  const filters = scope === "target" ? state.targetFilters : state.outgoingFilters;
+  const otherKey = key === "players" ? "picks" : "players";
+
+  if (!checked && !filters[otherKey]) {
+    filters[key] = true;
+  } else {
+    filters[key] = checked;
+  }
+
+  syncAssetTypeToggles();
+  if (scope === "target") {
+    renderPlayerSearch();
+    return;
+  }
+  pruneSelectedOutgoingAssetsByFilters();
+  renderOutgoingAssetSearch();
+}
+
+function syncAssetTypeToggles() {
+  if (el.targetPlayersToggle) el.targetPlayersToggle.checked = state.targetFilters.players;
+  if (el.targetPicksToggle) el.targetPicksToggle.checked = state.targetFilters.picks;
+  if (el.givePlayersToggle) el.givePlayersToggle.checked = state.outgoingFilters.players;
+  if (el.givePicksToggle) el.givePicksToggle.checked = state.outgoingFilters.picks;
+}
+
+function getMyRoster() {
+  if (!state.meRosterId) return null;
+  const meRosterId = Number(el.meSelect.value || state.meRosterId);
+  state.meRosterId = meRosterId;
+  return state.normalizedRosters.find((roster) => roster.rosterId === meRosterId) || null;
+}
+
+function assetTypeAllowed(asset, filters) {
+  return (asset.assetType === "player" && filters.players) || (asset.assetType === "pick" && filters.picks);
+}
+
+function assetMatchesQuery(asset, query) {
+  if (!query) return true;
+  const pickSeason = asset.raw?.season != null ? String(asset.raw.season) : "";
+  const pickRound = asset.raw?.round != null ? `round ${asset.raw.round}` : "";
+  const position = playerPositionForAsset(asset);
+  const haystack = [asset.name, pickSeason, pickRound, position, asset.assetType].join(" ").toLowerCase();
+  return haystack.includes(query);
+}
+
+function sortAssetsForList(a, b) {
+  if (a.assetType !== b.assetType) return a.assetType === "player" ? -1 : 1;
+  return a.name.localeCompare(b.name);
 }
 
 function renderPlayerSearch() {
   if (!state.meRosterId) return;
   const meRosterId = Number(el.meSelect.value || state.meRosterId);
   state.meRosterId = meRosterId;
-  const q = el.playerSearch.value.trim().toLowerCase();
+  const query = el.playerSearch.value.trim().toLowerCase();
+
+  if (
+    state.targetAsset &&
+    (state.targetAsset.managerRosterId === meRosterId || !assetTypeAllowed(state.targetAsset, state.targetFilters))
+  ) {
+    state.targetAsset = null;
+  }
 
   const candidates = state.normalizedRosters
-    .filter((r) => r.rosterId !== meRosterId)
-    .flatMap((r) => r.assets.filter((a) => a.assetType === "player").map((a) => ({ ...a, managerName: r.manager.displayName, managerRosterId: r.rosterId })))
-    .filter((a) => !q || a.name.toLowerCase().includes(q))
-    .sort((a, b) => a.name.localeCompare(b.name))
+    .filter((roster) => roster.rosterId !== meRosterId)
+    .flatMap((roster) =>
+      roster.assets
+        .filter((asset) => assetTypeAllowed(asset, state.targetFilters))
+        .map((asset) => ({
+          ...asset,
+          managerName: roster.manager.displayName,
+          managerRosterId: roster.rosterId,
+        }))
+    )
+    .filter((asset) => assetMatchesQuery(asset, query))
+    .sort(sortAssetsForList)
     .slice(0, 150);
 
   el.playerResults.innerHTML = "";
 
   if (candidates.length === 0) {
-    el.playerResults.innerHTML = `<div class="player-item muted">No players found.</div>`;
+    el.playerResults.innerHTML = `<div class="player-item muted">No matching assets found on other rosters.</div>`;
     return;
   }
 
   for (const asset of candidates) {
     const row = document.createElement("div");
     row.className = `player-item ${state.targetAsset?.assetId === asset.assetId ? "selected" : ""}`;
-    row.innerHTML = `<strong>${asset.name}</strong><br/><span class="muted">Manager: ${asset.managerName}</span>`;
+    row.innerHTML = buildAssetPickerMarkup(asset, {
+      values: state.values,
+      contextLabel: asset.managerName,
+    });
     row.addEventListener("click", () => {
       state.targetAsset = asset;
+      el.resultsSection.classList.add("hidden");
       renderPlayerSearch();
     });
     el.playerResults.appendChild(row);
   }
+}
+
+function pruneSelectedOutgoingAssets() {
+  const meRoster = getMyRoster();
+  if (!meRoster) {
+    state.selectedOutgoingAssetIds.clear();
+    updateSelectedAssetsSummary();
+    return;
+  }
+
+  const validAssetIds = new Set(meRoster.assets.map((asset) => asset.assetId));
+  state.selectedOutgoingAssetIds = new Set(
+    [...state.selectedOutgoingAssetIds].filter((assetId) => validAssetIds.has(assetId))
+  );
+  updateSelectedAssetsSummary();
+}
+
+function pruneSelectedOutgoingAssetsByFilters() {
+  const meRoster = getMyRoster();
+  if (!meRoster) return;
+
+  const allowedAssetIds = new Set(
+    meRoster.assets
+      .filter((asset) => assetTypeAllowed(asset, state.outgoingFilters))
+      .map((asset) => asset.assetId)
+  );
+  state.selectedOutgoingAssetIds = new Set(
+    [...state.selectedOutgoingAssetIds].filter((assetId) => allowedAssetIds.has(assetId))
+  );
+}
+
+function getVisibleOutgoingAssets() {
+  const meRoster = getMyRoster();
+  if (!meRoster) return [];
+
+  const query = el.myAssetSearch?.value.trim().toLowerCase() || "";
+  return meRoster.assets
+    .filter((asset) => assetTypeAllowed(asset, state.outgoingFilters))
+    .filter((asset) => assetMatchesQuery(asset, query))
+    .sort(sortAssetsForList)
+    .slice(0, 150);
+}
+
+function selectVisibleOutgoingAssets() {
+  invalidateResults();
+  const visibleAssets = getVisibleOutgoingAssets();
+  visibleAssets.forEach((asset) => state.selectedOutgoingAssetIds.add(asset.assetId));
+  renderOutgoingAssetSearch();
+}
+
+function clearSelectedOutgoingAssets() {
+  invalidateResults();
+  state.selectedOutgoingAssetIds.clear();
+  renderOutgoingAssetSearch();
+}
+
+function toggleOutgoingAsset(assetId) {
+  invalidateResults();
+  if (state.selectedOutgoingAssetIds.has(assetId)) {
+    state.selectedOutgoingAssetIds.delete(assetId);
+  } else {
+    state.selectedOutgoingAssetIds.add(assetId);
+  }
+  renderOutgoingAssetSearch();
+}
+
+function renderOutgoingAssetSearch() {
+  if (!el.myAssetResults) return;
+  const meRoster = getMyRoster();
+  if (!meRoster) {
+    el.myAssetResults.innerHTML = `<div class="player-item muted">Choose your team first.</div>`;
+    updateSelectedAssetsSummary();
+    return;
+  }
+
+  const visibleAssets = getVisibleOutgoingAssets();
+  el.myAssetResults.innerHTML = "";
+
+  if (visibleAssets.length === 0) {
+    el.myAssetResults.innerHTML = `<div class="player-item muted">No matching assets found on your roster.</div>`;
+    updateSelectedAssetsSummary();
+    return;
+  }
+
+  for (const asset of visibleAssets) {
+    const row = document.createElement("div");
+    const selected = state.selectedOutgoingAssetIds.has(asset.assetId);
+    row.className = `player-item ${selected ? "selected" : ""}`;
+    row.innerHTML = buildAssetPickerMarkup(asset, {
+      values: state.values,
+      contextLabel: selected ? "Selected for trade pool" : "Tap to include in trade pool",
+      emphasisTags: getProtectionTags(asset, meRoster, state.values),
+    });
+    row.addEventListener("click", () => toggleOutgoingAsset(asset.assetId));
+    el.myAssetResults.appendChild(row);
+  }
+
+  updateSelectedAssetsSummary();
+}
+
+function updateSelectedAssetsSummary() {
+  if (!el.selectedAssetsSummary) return;
+
+  const protectedNotes = [];
+  if (el.protectCoreToggle?.checked) protectedNotes.push("core protection on");
+  if (el.protectFirstsToggle?.checked) protectedNotes.push("1st-round protection on");
+  const suffix = protectedNotes.length ? ` (${protectedNotes.join(", ")})` : "";
+
+  if (state.selectedOutgoingAssetIds.size > 0) {
+    el.selectedAssetsSummary.textContent = `${state.selectedOutgoingAssetIds.size} exact asset${state.selectedOutgoingAssetIds.size === 1 ? "" : "s"} selected. The lab will only use these pieces${suffix}.`;
+    return;
+  }
+
+  const allowedTypes = [
+    state.outgoingFilters.players ? "players" : null,
+    state.outgoingFilters.picks ? "picks" : null,
+  ].filter(Boolean).join(" + ");
+  el.selectedAssetsSummary.textContent = `No exact assets selected yet. The lab can use any allowed ${allowedTypes}${suffix}.`;
+}
+
+function buildAssetPickerMarkup(asset, { values, contextLabel, emphasisTags = [] } = {}) {
+  const pills = [];
+  pills.push(`<span class="asset-pill ${asset.assetType === "pick" ? "gold" : ""}">${asset.assetType === "pick" ? "Pick" : playerPositionForAsset(asset) || "Player"}</span>`);
+
+  if (asset.assetType === "player" && asset.raw?.age) {
+    pills.push(`<span class="asset-pill">${asset.raw.age} yrs</span>`);
+  }
+
+  if (asset.assetType === "pick") {
+    if (asset.raw?.season) pills.push(`<span class="asset-pill">${asset.raw.season}</span>`);
+    if (asset.raw?.round) pills.push(`<span class="asset-pill">R${asset.raw.round}</span>`);
+  }
+
+  pills.push(`<span class="asset-pill gold">Value ${formatNumber(getAssetValue(asset, values))}</span>`);
+  emphasisTags.slice(0, 2).forEach((tag) => pills.push(`<span class="asset-pill rose">${tag}</span>`));
+
+  return `
+    <div class="asset-row-top">
+      <strong>${asset.name}</strong>
+      <span class="muted small">${contextLabel || ""}</span>
+    </div>
+    <div class="asset-meta">
+      ${pills.join("")}
+    </div>
+  `;
+}
+
+function getProtectionTags(asset, myRoster, values) {
+  const tags = [];
+  if (el.protectCoreToggle?.checked && getCoreAssetIdSet(myRoster, values).has(asset.assetId)) {
+    tags.push("Core piece");
+  }
+  if (el.protectFirstsToggle?.checked && isFirstRoundPick(asset)) {
+    tags.push("Protected 1st");
+  }
+  return tags;
 }
 
 async function generateTradeIdeas() {
@@ -339,12 +643,12 @@ async function generateTradeIdeas() {
     return;
   }
   if (!state.targetAsset) {
-    alert("Select a target player first.");
+    alert("Select a target asset first.");
     return;
   }
 
-  const meRoster = state.normalizedRosters.find((r) => r.rosterId === state.meRosterId);
-  const theirRoster = state.normalizedRosters.find((r) => r.rosterId === state.targetAsset.managerRosterId);
+  const meRoster = getMyRoster();
+  const theirRoster = state.normalizedRosters.find((roster) => roster.rosterId === state.targetAsset.managerRosterId);
   if (!meRoster || !theirRoster) {
     alert("Could not resolve rosters.");
     return;
@@ -353,6 +657,7 @@ async function generateTradeIdeas() {
   const fairnessPct = Number(el.fairnessInput.value || 20);
   const maxResults = Number(el.maxResultsInput.value || 4);
   const allowExtraTargetAssets = Boolean(el.allowExtraTargetAssetsInput?.checked);
+  const tradeLab = getTradeLabSettings();
 
   try {
     state.values = await loadValues(el.ktcUrlInput.value.trim());
@@ -360,6 +665,9 @@ async function generateTradeIdeas() {
     alert(`Could not load valuation source. ${err.message}`);
     return;
   }
+
+  renderPlayerSearch();
+  renderOutgoingAssetSearch();
 
   const ideas = suggestTrades({
     myRoster: meRoster,
@@ -369,40 +677,117 @@ async function generateTradeIdeas() {
     fairnessPct,
     maxResults,
     allowExtraTargetAssets,
+    tradeLab,
   });
 
   el.resultsSection.classList.remove("hidden");
-  el.resultsSubtitle.textContent = `${meRoster.manager.displayName} acquiring ${state.targetAsset.name} from ${theirRoster.manager.displayName}`;
+  el.resultsSubtitle.textContent = buildResultsSubtitle({
+    meRoster,
+    theirRoster,
+    targetAsset: state.targetAsset,
+    fairnessPct,
+    tradeLab,
+  });
 
   if (ideas.length === 0) {
-    el.resultsList.innerHTML = `<p class="muted">No fair offers found once KTC package adjustment is applied. Increase fairness % or change target.</p>`;
+    el.resultsList.innerHTML = `<p class="muted">${buildNoIdeasMessage(tradeLab)}</p>`;
     return;
   }
 
-  el.resultsList.innerHTML = ideas
-    .map(
-      (idea, idx) => `
-      <article class="trade-card">
-        <h3>Idea ${idx + 1}</h3>
-        <p><strong>You send:</strong></p>
-        ${renderAssetList(idea.myAssets, state.values)}
-        <p><strong>You receive:</strong></p>
-        ${renderAssetList(idea.theirAssets, state.values)}
-        <p class="muted">Base value: you ${formatNumber(idea.myBaseValue)} vs them ${formatNumber(idea.theirBaseValue)}</p>
-        <p class="muted">Package adjustment: ${formatPackageAdjustment(idea)}</p>
-        <p class="muted">KTC-style total: you ${formatNumber(idea.myAdjustedValue)} vs them ${formatNumber(idea.theirAdjustedValue)} (diff ${idea.pctDiff}%)</p>
-        <p class="muted">Add value to even: ${formatNumber(idea.evenValue)}</p>
-      </article>`
-    )
-    .join("");
+  el.resultsList.innerHTML = ideas.map((idea, idx) => renderTradeCard(idea, idx, state.values)).join("");
 }
 
-function suggestTrades({ myRoster, theirRoster, targetAsset, values, fairnessPct, maxResults, allowExtraTargetAssets }) {
+function getTradeLabSettings() {
+  return {
+    allowPlayers: state.outgoingFilters.players,
+    allowPicks: state.outgoingFilters.picks,
+    selectedOutgoingAssetIds: new Set(state.selectedOutgoingAssetIds),
+    positionPremium: el.positionPremiumSelect?.value || "none",
+    tradeVibe: el.tradeVibeSelect?.value || "balanced",
+    pickPremium: Boolean(el.pickPremiumToggle?.checked),
+    youthPremium: Boolean(el.youthPremiumToggle?.checked),
+    depthPremium: Boolean(el.depthPremiumToggle?.checked),
+    protectCore: Boolean(el.protectCoreToggle?.checked),
+    protectFirsts: Boolean(el.protectFirstsToggle?.checked),
+    preferConsolidation: Boolean(el.preferConsolidationToggle?.checked),
+    swingBig: Boolean(el.swingBigToggle?.checked),
+  };
+}
+
+function buildResultsSubtitle({ meRoster, theirRoster, targetAsset, fairnessPct, tradeLab }) {
+  const notes = [];
+  const outgoingMode = [
+    tradeLab.allowPlayers ? "players" : null,
+    tradeLab.allowPicks ? "picks" : null,
+  ].filter(Boolean).join(" + ");
+  notes.push(`sending ${outgoingMode}`);
+  notes.push(`fairness ${getEffectiveFairnessPct(fairnessPct, tradeLab.tradeVibe)}%`);
+  if (tradeLab.pickPremium) notes.push("pick fever");
+  if (tradeLab.positionPremium !== "none") notes.push(`${tradeLab.positionPremium} premium`);
+  if (tradeLab.selectedOutgoingAssetIds.size > 0) {
+    notes.push(`${tradeLab.selectedOutgoingAssetIds.size} hand-picked outgoing asset${tradeLab.selectedOutgoingAssetIds.size === 1 ? "" : "s"}`);
+  }
+  return `${meRoster.manager.displayName} building for ${targetAsset.name} from ${theirRoster.manager.displayName} • ${notes.join(" • ")}`;
+}
+
+function buildNoIdeasMessage(tradeLab) {
+  const advice = [];
+  if (tradeLab.selectedOutgoingAssetIds.size > 0) advice.push("expand your outgoing pool");
+  if (tradeLab.protectCore || tradeLab.protectFirsts) advice.push("relax one of the protection toggles");
+  advice.push("increase fairness %");
+  advice.push("change the target");
+  return `No offers survived both the fairness check and the Trade Lab rules. Try to ${advice.join(", ")}.`;
+}
+
+function renderTradeCard(idea, index, values) {
+  return `
+    <article class="trade-card">
+      <div class="trade-card-header">
+        <div>
+          <h3>Idea ${index + 1}</h3>
+          <p class="muted small">${idea.summary}</p>
+        </div>
+        <span class="trade-score">Trade Lab ${idea.labScore}</span>
+      </div>
+      <div class="trade-tag-row">
+        ${idea.tags.map((tag) => `<span class="trade-tag">${tag}</span>`).join("")}
+      </div>
+      <p><strong>You send:</strong></p>
+      ${renderAssetList(idea.myAssets, values)}
+      <p><strong>You receive:</strong></p>
+      ${renderAssetList(idea.theirAssets, values)}
+      <div class="trade-metrics">
+        <div class="trade-metric">
+          <strong>KTC balance</strong>
+          you ${formatNumber(idea.myAdjustedValue)} vs them ${formatNumber(idea.theirAdjustedValue)} (${idea.pctDiff}% diff)
+        </div>
+        <div class="trade-metric">
+          <strong>Market fit</strong>
+          you ${formatNumber(idea.marketMyValue)} vs them ${formatNumber(idea.marketTheirValue)} (${idea.marketDelta >= 0 ? "+" : ""}${formatNumber(idea.marketDelta)})
+        </div>
+        <div class="trade-metric">
+          <strong>Package adjustment</strong>
+          ${formatPackageAdjustment(idea)}
+        </div>
+        <div class="trade-metric">
+          <strong>Even-up value</strong>
+          ${formatNumber(idea.evenValue)}
+        </div>
+      </div>
+      <p class="trade-pitch"><strong>Pitch:</strong> ${idea.pitch}</p>
+    </article>
+  `;
+}
+
+function suggestTrades({ myRoster, theirRoster, targetAsset, values, fairnessPct, maxResults, allowExtraTargetAssets, tradeLab }) {
   const targetValue = getAssetValue(targetAsset, values);
-  if (!targetValue) return [];
+  if (!Number.isFinite(targetValue)) return [];
+
+  const myAssetPool = resolveOutgoingAssetPool({ myRoster, values, tradeLab });
+  if (myAssetPool.length === 0) return [];
 
   const globalMaxValue = getGlobalMaxPlayerValue(values, targetValue);
-  const myPackages = buildPackages(myRoster.assets, values, 3);
+  const myPackages = buildPackages(myAssetPool, values, 3);
   const theirPackages = buildTargetPackages({
     theirRoster,
     targetAsset,
@@ -410,6 +795,7 @@ function suggestTrades({ myRoster, theirRoster, targetAsset, values, fairnessPct
     allowExtraTargetAssets,
     maxExtraAssets: 2,
   });
+  const effectiveFairnessPct = getEffectiveFairnessPct(fairnessPct, tradeLab.tradeVibe);
 
   const rawIdeas = [];
   for (const myPackage of myPackages) {
@@ -420,12 +806,25 @@ function suggestTrades({ myRoster, theirRoster, targetAsset, values, fairnessPct
         globalMaxValue,
       });
       const pctDiff = calculatePctDiff(packageResult.myAdjustedValue, packageResult.theirAdjustedValue);
-      if (pctDiff <= fairnessPct) {
+      if (pctDiff <= effectiveFairnessPct) {
+        const labDetails = scoreTradeIdea({
+          myRoster,
+          theirRoster,
+          targetAsset,
+          myAssets: myPackage.assets,
+          theirAssets: theirPackage.assets,
+          values,
+          pctDiff,
+          tradeLab,
+          allowExtraTargetAssets,
+        });
+
         rawIdeas.push({
           myAssets: myPackage.assets,
           theirAssets: theirPackage.assets,
           ...packageResult,
           pctDiff: Number(pctDiff.toFixed(2)),
+          ...labDetails,
         });
       }
     }
@@ -440,20 +839,230 @@ function suggestTrades({ myRoster, theirRoster, targetAsset, values, fairnessPct
     deduped.push(idea);
   }
 
-  deduped.sort((a, b) => {
-    const byDiff = Math.abs(a.pctDiff) - Math.abs(b.pctDiff);
-    if (byDiff !== 0) return byDiff;
-
-    const byEvenValue = a.evenValue - b.evenValue;
-    if (byEvenValue !== 0) return byEvenValue;
-    const byTotalAssets = (a.myAssets.length + a.theirAssets.length) - (b.myAssets.length + b.theirAssets.length);
-    if (byTotalAssets !== 0) return byTotalAssets;
-    const byTheirAssets = a.theirAssets.length - b.theirAssets.length;
-    if (byTheirAssets !== 0) return byTheirAssets;
-    return a.myAssets.length - b.myAssets.length;
-  });
+  deduped.sort((a, b) => compareTradeIdeas(a, b));
 
   return deduped.slice(0, maxResults);
+}
+
+function resolveOutgoingAssetPool({ myRoster, values, tradeLab }) {
+  let pool = myRoster.assets.filter((asset) =>
+    (asset.assetType === "player" && tradeLab.allowPlayers) || (asset.assetType === "pick" && tradeLab.allowPicks)
+  );
+
+  if (tradeLab.selectedOutgoingAssetIds.size > 0) {
+    return pool.filter((asset) => tradeLab.selectedOutgoingAssetIds.has(asset.assetId));
+  }
+
+  if (tradeLab.protectCore) {
+    const coreAssetIds = getCoreAssetIdSet(myRoster, values);
+    pool = pool.filter((asset) => !coreAssetIds.has(asset.assetId));
+  }
+
+  if (tradeLab.protectFirsts) {
+    pool = pool.filter((asset) => !isFirstRoundPick(asset));
+  }
+
+  return pool;
+}
+
+function getEffectiveFairnessPct(fairnessPct, tradeVibe) {
+  const vibeBuffer = {
+    balanced: 0,
+    aggressive: 4,
+    chaos: 8,
+  };
+  return fairnessPct + (vibeBuffer[tradeVibe] || 0);
+}
+
+function scoreTradeIdea({ myRoster, theirRoster, targetAsset, myAssets, theirAssets, values, pctDiff, tradeLab, allowExtraTargetAssets }) {
+  const marketMyValue = calculatePerceivedPackageValue(myAssets, values, tradeLab);
+  const marketTheirValue = calculatePerceivedPackageValue(theirAssets, values, tradeLab);
+  const marketDelta = marketMyValue - marketTheirValue;
+  const coreAssetIds = getCoreAssetIdSet(myRoster, values);
+  const exposesCore = myAssets.some((asset) => coreAssetIds.has(asset.assetId));
+  const spendsProtectedFirst = myAssets.some((asset) => isFirstRoundPick(asset));
+
+  let labScore = 82;
+  labScore -= pctDiff * (tradeLab.tradeVibe === "chaos" ? 0.55 : tradeLab.tradeVibe === "aggressive" ? 0.8 : 1.1);
+  labScore += Math.max(-18, Math.min(18, marketDelta / 240));
+
+  if (tradeLab.pickPremium && myAssets.some((asset) => asset.assetType === "pick")) labScore += 6;
+  if (tradeLab.depthPremium && myAssets.length >= 2) labScore += 7;
+  if (tradeLab.preferConsolidation) {
+    if (myAssets.length > theirAssets.length) labScore += 11;
+    if (myAssets.length < theirAssets.length) labScore -= 5;
+  }
+  if (tradeLab.protectCore) labScore += exposesCore ? -16 : 9;
+  if (tradeLab.protectFirsts) labScore += spendsProtectedFirst ? -11 : 6;
+  if (tradeLab.positionPremium !== "none" && myAssets.some((asset) => playerPositionForAsset(asset) === tradeLab.positionPremium)) {
+    labScore += 6;
+  }
+  if (tradeLab.youthPremium && myAssets.some(isYouthAsset)) labScore += 5;
+  if (tradeLab.swingBig) labScore += getCeilingBonus(targetAsset, theirAssets);
+  if (allowExtraTargetAssets && theirAssets.length > 1) labScore += 5;
+  if (tradeLab.tradeVibe === "aggressive") labScore += 3;
+  if (tradeLab.tradeVibe === "chaos") labScore += 6;
+
+  const reasoning = buildTradeReasoning({
+    myRoster,
+    theirRoster,
+    targetAsset,
+    myAssets,
+    theirAssets,
+    values,
+    tradeLab,
+    marketDelta,
+    exposesCore,
+    spendsProtectedFirst,
+    allowExtraTargetAssets,
+  });
+
+  return {
+    labScore: clamp(Math.round(labScore), 1, 99),
+    marketMyValue,
+    marketTheirValue,
+    marketDelta: Math.round(marketDelta),
+    tags: reasoning.tags,
+    summary: reasoning.summary,
+    pitch: reasoning.pitch,
+  };
+}
+
+function compareTradeIdeas(a, b) {
+  const byLabScore = b.labScore - a.labScore;
+  if (byLabScore !== 0) return byLabScore;
+
+  const byDiff = Math.abs(a.pctDiff) - Math.abs(b.pctDiff);
+  if (byDiff !== 0) return byDiff;
+
+  const byMarketDelta = b.marketDelta - a.marketDelta;
+  if (byMarketDelta !== 0) return byMarketDelta;
+
+  const byEvenValue = a.evenValue - b.evenValue;
+  if (byEvenValue !== 0) return byEvenValue;
+
+  return (a.myAssets.length + a.theirAssets.length) - (b.myAssets.length + b.theirAssets.length);
+}
+
+function calculatePerceivedPackageValue(assets, values, tradeLab) {
+  const total = assets.reduce((sum, asset) => sum + getPerceivedAssetValue(asset, values, tradeLab), 0);
+  let packageBonus = 0;
+
+  if (tradeLab.depthPremium && assets.length >= 2) {
+    packageBonus += 120 * (assets.length - 1);
+  }
+
+  return Math.round(total + packageBonus);
+}
+
+function getPerceivedAssetValue(asset, values, tradeLab) {
+  const baseValue = getAssetValue(asset, values);
+  let multiplier = 1;
+
+  if (tradeLab.pickPremium && asset.assetType === "pick") multiplier += 0.12;
+  if (tradeLab.positionPremium !== "none" && playerPositionForAsset(asset) === tradeLab.positionPremium) multiplier += 0.1;
+  if (tradeLab.youthPremium && asset.assetType === "player") {
+    const age = playerAgeForAsset(asset);
+    if (Number.isFinite(age) && age <= 24) multiplier += 0.08;
+    if (Number.isFinite(age) && age >= 29) multiplier -= 0.05;
+  }
+
+  return Math.round(baseValue * multiplier);
+}
+
+function buildTradeReasoning({
+  myRoster,
+  theirRoster,
+  targetAsset,
+  myAssets,
+  theirAssets,
+  values,
+  tradeLab,
+  marketDelta,
+  exposesCore,
+  spendsProtectedFirst,
+  allowExtraTargetAssets,
+}) {
+  const tags = [];
+  const notes = [];
+
+  if (tradeLab.pickPremium && myAssets.some((asset) => asset.assetType === "pick")) {
+    tags.push("Pick Fever");
+    notes.push("your outgoing picks should feel richer in this room");
+  }
+  if (tradeLab.positionPremium !== "none" && myAssets.some((asset) => playerPositionForAsset(asset) === tradeLab.positionPremium)) {
+    tags.push(`${tradeLab.positionPremium} Premium`);
+    notes.push(`${tradeLab.positionPremium.toLowerCase()} liquidity is doing part of the work here`);
+  }
+  if (tradeLab.depthPremium && myAssets.length > theirAssets.length) {
+    tags.push("Depth Deal");
+    notes.push("this sells as one asset turning into multiple usable pieces");
+  }
+  if (tradeLab.preferConsolidation && myAssets.length > theirAssets.length) {
+    tags.push("Consolidation");
+  }
+  if (tradeLab.protectCore && !exposesCore) {
+    tags.push("Core Intact");
+    notes.push("you are not cutting into the spine of your roster");
+  }
+  if (tradeLab.protectFirsts && !spendsProtectedFirst) {
+    tags.push("Firsts Safe");
+  }
+  if (tradeLab.youthPremium && myAssets.some(isYouthAsset)) {
+    tags.push("Youth Bait");
+  }
+  if (tradeLab.swingBig && getCeilingBonus(targetAsset, theirAssets) > 0) {
+    tags.push("Ceiling Swing");
+    notes.push(`you are paying for ${targetAsset.name} without turning it into a pure panic overpay`);
+  }
+  if (allowExtraTargetAssets && theirAssets.length > 1) {
+    tags.push("Sweetener Back");
+    notes.push("the extra piece keeps the offer from feeling like a blind reach");
+  }
+  if (marketDelta >= 250) {
+    tags.push("Market Leverage");
+  }
+  if (tags.length === 0) {
+    tags.push("Fair Market");
+    notes.push("this is mostly a straightforward value conversation");
+  }
+
+  const summary = notes.slice(0, 2).join(". ").replace(/\.$/, "") || "clean starter package with enough market logic to open the conversation";
+
+  let pitch = `Open with: “I’m trying to get to ${targetAsset.name} without wasting your time. This gives you ${myAssets.length > 1 ? `${myAssets.length} pieces of usable value` : "real value"} and keeps the deal close to market.”`;
+  if (tradeLab.pickPremium && myAssets.some((asset) => asset.assetType === "pick")) {
+    pitch = `Open with: “If your room still loves future capital, this gives ${theirRoster.manager.displayName} more draft insulation while I pay up for ${targetAsset.name}.”`;
+  } else if (tradeLab.depthPremium && myAssets.length > theirAssets.length) {
+    pitch = `Open with: “This lets ${theirRoster.manager.displayName} turn one chip into ${myAssets.length} usable pieces without getting crushed on value.”`;
+  } else if (tradeLab.positionPremium !== "none" && myAssets.some((asset) => playerPositionForAsset(asset) === tradeLab.positionPremium)) {
+    pitch = `Open with: “I know ${tradeLab.positionPremium}s carry extra juice in this league, so I built this around that premium instead of random filler.”`;
+  } else if (allowExtraTargetAssets && theirAssets.length > 1) {
+    pitch = `Open with: “I’m good paying for ${targetAsset.name}, but I’d want the small add-on back so the deal lands closer to neutral for both sides.”`;
+  }
+
+  return {
+    tags: [...new Set(tags)].slice(0, 4),
+    summary: `${summary}.`,
+    pitch,
+  };
+}
+
+function getCeilingBonus(targetAsset, receivedAssets) {
+  let bonus = 0;
+  const targetAge = playerAgeForAsset(targetAsset);
+  const targetPosition = playerPositionForAsset(targetAsset);
+
+  if (targetAsset.assetType === "player") {
+    if (Number.isFinite(targetAge) && targetAge <= 25) bonus += 4;
+    if (targetPosition === "QB" || targetPosition === "WR") bonus += 3;
+  }
+
+  if (receivedAssets.length === 1) bonus += 2;
+  return bonus;
+}
+
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
 }
 
 function formatPackageAdjustment(idea) {
@@ -642,7 +1251,7 @@ function renderAssetList(assets, values) {
           (asset) => `
             <li class="asset-item">
               <span>${asset.name}</span>
-              <span class="asset-value">(${formatNumber(getAssetValue(asset, values))})</span>
+              <span class="asset-value">${formatAssetSecondaryLabel(asset, values)}</span>
             </li>`
         )
         .join("")}
@@ -665,10 +1274,54 @@ function getAssetValue(asset, values) {
   return estimatedValue(asset);
 }
 
+function formatAssetSecondaryLabel(asset, values) {
+  const parts = [formatNumber(getAssetValue(asset, values))];
+  if (asset.assetType === "player") {
+    const position = playerPositionForAsset(asset);
+    if (position) parts.push(position);
+    const age = playerAgeForAsset(asset);
+    if (Number.isFinite(age)) parts.push(`${age}y`);
+  } else {
+    if (asset.raw?.season) parts.push(String(asset.raw.season));
+    if (asset.raw?.round) parts.push(`R${asset.raw.round}`);
+  }
+  return `(${parts.join(" • ")})`;
+}
+
+function playerPositionForAsset(asset) {
+  return (asset?.raw?.position || asset?.raw?.fantasy_positions?.[0] || "").toUpperCase();
+}
+
+function playerAgeForAsset(asset) {
+  const age = Number(asset?.raw?.age);
+  return Number.isFinite(age) ? age : null;
+}
+
+function isYouthAsset(asset) {
+  if (asset.assetType !== "player") return false;
+  const age = playerAgeForAsset(asset);
+  return Number.isFinite(age) && age <= 24;
+}
+
+function isFirstRoundPick(asset) {
+  return asset.assetType === "pick" && Number(asset.raw?.round) === 1;
+}
+
+function getCoreAssetIdSet(myRoster, values) {
+  const topPlayers = myRoster.assets
+    .filter((asset) => asset.assetType === "player")
+    .map((asset) => ({ assetId: asset.assetId, value: getAssetValue(asset, values) }))
+    .sort((a, b) => b.value - a.value)
+    .slice(0, 4)
+    .map((entry) => entry.assetId);
+
+  return new Set(topPlayers);
+}
+
 function estimatedValue(asset) {
   if (asset.assetType === "pick") return 2200;
 
-  const position = (asset.raw?.position || asset.raw?.fantasy_positions?.[0] || "").toUpperCase();
+  const position = playerPositionForAsset(asset);
   const age = Number(asset.raw?.age || 26);
   const baseByPos = {
     QB: 4300,

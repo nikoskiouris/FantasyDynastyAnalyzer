@@ -4,6 +4,9 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Fantasy Dynasty Analyzer</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
@@ -36,14 +39,124 @@
       </section>
 
       <section class="card hidden" id="player-section">
-        <h2>3) Which player do you want?</h2>
-        <label for="player-search">Search player on another roster</label>
-        <input id="player-search" placeholder="Start typing a player name..." />
+        <h2>3) What are you chasing?</h2>
+        <p class="muted small">Search another roster for a player, a pick, or both.</p>
+        <div class="chip-row">
+          <label class="chip-toggle" for="target-players-toggle">
+            <input id="target-players-toggle" type="checkbox" checked />
+            <span>Players</span>
+          </label>
+          <label class="chip-toggle" for="target-picks-toggle">
+            <input id="target-picks-toggle" type="checkbox" />
+            <span>Picks</span>
+          </label>
+        </div>
+        <label for="player-search">Search assets on another roster</label>
+        <input id="player-search" placeholder="Start typing a player name or pick..." />
         <div id="player-results" class="list"></div>
       </section>
 
+      <section class="card hidden trade-lab" id="builder-section">
+        <h2>4) Build your side of the trade</h2>
+        <p class="muted small">Tell the app what you are actually willing to move, then it will build offers around that pool.</p>
+        <div class="chip-row">
+          <label class="chip-toggle" for="give-players-toggle">
+            <input id="give-players-toggle" type="checkbox" checked />
+            <span>Players</span>
+          </label>
+          <label class="chip-toggle" for="give-picks-toggle">
+            <input id="give-picks-toggle" type="checkbox" checked />
+            <span>Picks</span>
+          </label>
+        </div>
+        <label for="my-asset-search">Optional: hand-pick assets you are open to moving</label>
+        <input id="my-asset-search" placeholder="Search your roster..." />
+        <div class="builder-toolbar">
+          <button id="select-visible-assets-btn" type="button" class="secondary-btn">Select visible</button>
+          <button id="clear-selected-assets-btn" type="button" class="secondary-btn">Clear selected</button>
+        </div>
+        <p id="selected-assets-summary" class="muted small">No exact assets selected yet. The lab can use any asset type you allow above.</p>
+        <div id="my-asset-results" class="list"></div>
+      </section>
+
+      <section class="card hidden" id="market-section">
+        <h2>5) Read your league room</h2>
+        <p class="muted small">These settings do not just change the math. They change how the app tries to make the deal feel believable in your league.</p>
+        <div class="grid">
+          <label>
+            Position your league chases
+            <select id="position-premium-select">
+              <option value="none">No clear premium</option>
+              <option value="QB">Quarterbacks</option>
+              <option value="RB">Running backs</option>
+              <option value="WR">Wide receivers</option>
+              <option value="TE">Tight ends</option>
+            </select>
+          </label>
+          <label>
+            Trade vibe
+            <select id="trade-vibe-select">
+              <option value="balanced">Balanced</option>
+              <option value="aggressive">Aggressive</option>
+              <option value="chaos">Chaos goblin</option>
+            </select>
+          </label>
+        </div>
+        <div class="toggle-grid">
+          <label class="toggle-card" for="pick-premium-toggle">
+            <input id="pick-premium-toggle" type="checkbox" />
+            <span>
+              <strong>Pick fever</strong>
+              <small>Your league treats draft picks like blue-chip crypto.</small>
+            </span>
+          </label>
+          <label class="toggle-card" for="youth-premium-toggle">
+            <input id="youth-premium-toggle" type="checkbox" />
+            <span>
+              <strong>Youth obsession</strong>
+              <small>Managers will overpay for age insulation and upside.</small>
+            </span>
+          </label>
+          <label class="toggle-card" for="depth-premium-toggle">
+            <input id="depth-premium-toggle" type="checkbox" />
+            <span>
+              <strong>Depth lovers</strong>
+              <small>Two-for-ones and starter bundles play well in your room.</small>
+            </span>
+          </label>
+          <label class="toggle-card" for="protect-core-toggle">
+            <input id="protect-core-toggle" type="checkbox" checked />
+            <span>
+              <strong>Protect my core</strong>
+              <small>Prefer offers that do not cut into your most valuable foundational pieces.</small>
+            </span>
+          </label>
+          <label class="toggle-card" for="protect-firsts-toggle">
+            <input id="protect-firsts-toggle" type="checkbox" />
+            <span>
+              <strong>Protect my firsts</strong>
+              <small>Avoid spending first-rounders unless you manually include them.</small>
+            </span>
+          </label>
+          <label class="toggle-card" for="prefer-consolidation-toggle">
+            <input id="prefer-consolidation-toggle" type="checkbox" checked />
+            <span>
+              <strong>Prefer consolidation</strong>
+              <small>Favor “depth plus picks for a stud” shapes over sideways swaps.</small>
+            </span>
+          </label>
+          <label class="toggle-card" for="swing-big-toggle">
+            <input id="swing-big-toggle" type="checkbox" />
+            <span>
+              <strong>Swing for ceiling</strong>
+              <small>Give extra credit to packages that land a real difference-maker.</small>
+            </span>
+          </label>
+        </div>
+      </section>
+
       <section class="card hidden" id="settings-section">
-        <h2>4) Generate offers</h2>
+        <h2>6) Generate offers</h2>
         <div class="grid">
           <label>
             Fairness threshold (%)
@@ -60,7 +173,7 @@
         </div>
         <label class="toggle-option" for="allow-extra-target-assets">
           <input id="allow-extra-target-assets" type="checkbox" />
-          <span>Allow extra players/picks on their side if your searched player alone does not make a fair deal.</span>
+          <span>Ask the builder to include a throw-in from their side when your target alone does not make the numbers work.</span>
         </label>
         <button id="generate-btn">Generate Trade Ideas</button>
         <p class="muted small">Uses KTC-style values from your URL if provided, otherwise repo sample data + fallback estimates.</p>
