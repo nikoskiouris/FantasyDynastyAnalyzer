@@ -7,11 +7,21 @@ const OUTGOING_POOL_LIMIT = 18;
 const DEFAULT_MAX_OUTGOING_PACKAGE_SIZE = 5;
 const ELITE_MAX_OUTGOING_PACKAGE_SIZE = 6;
 const ELITE_TARGET_VALUE_THRESHOLD = 7000;
+const STAR_TARGET_VALUE_THRESHOLD = 5000;
 const MIN_OUTGOING_ASSET_VALUE = 450;
 const LINEUP_EXACT_SOLVER_CANDIDATE_LIMIT = 14;
 const LINEUP_EXACT_SOLVER_SLOT_LIMIT = 11;
 const LINEUP_CANDIDATE_FLOOR = 6;
 const LINEUP_CANDIDATE_BUFFER = 2;
+const ELITE_TARGET_ANCHOR_SHARE_BASE = 0.48;
+const STAR_TARGET_ANCHOR_SHARE_BASE = 0.4;
+const ANCHOR_SHARE_STEP_PER_EXTRA_ASSET = 0.02;
+const MAX_TARGET_ANCHOR_SHARE = 0.64;
+const ELITE_FRAGMENTATION_TAX_PER_EXTRA_ASSET = 180;
+const STAR_FRAGMENTATION_TAX_PER_EXTRA_ASSET = 120;
+const BASE_FRAGMENTATION_TAX_PER_EXTRA_ASSET = 70;
+const PACKAGE_DIVERSITY_OVERLAP_RATIO = 0.55;
+const PACKAGE_DIVERSITY_VALUE_OVERLAP_RATIO = 0.72;
 const KTC_RAW_BASE = 0.10;
 const KTC_RAW_ELITE_WEIGHT = 0.04;
 const KTC_RAW_TRADE_WEIGHT = 0.09;
@@ -37,6 +47,7 @@ const state = {
   valuationsPromise: null,
   values: {},
   valueNameMap: {},
+  playerPositionRankByAssetId: {},
   pickValueCatalog: [],
   globalMaxPlayerValue: KTC_GLOBAL_MAX_FALLBACK,
   targetFilters: {
@@ -228,6 +239,7 @@ async function loadLeague() {
     loadPlayersWithCache()
       .then((players) => {
         state.players = players;
+        refreshPlayerPositionRanks();
         state.normalizedRosters = normalizeRosters(state.rosters, state.users, players, {
           league: state.previousLeague,
           users: state.previousUsers,
@@ -514,6 +526,11 @@ function sortAssetsByValueDesc(a, b, values = state.values) {
   return a.name.localeCompare(b.name);
 }
 
+function sortAssetPickerOptions(a, b, values = state.values) {
+  if (a.assetType !== b.assetType) return a.assetType === "player" ? -1 : 1;
+  return sortAssetsByValueDesc(a, b, values);
+}
+
 function renderPlayerSearch() {
   if (!state.meRosterId) return;
   const meRosterId = Number(el.meSelect.value || state.meRosterId);
@@ -667,7 +684,7 @@ function getVisibleOutgoingAssets() {
     .filter((asset) => assetTypeAllowed(asset, state.outgoingFilters))
     .filter((asset) => !state.excludedOutgoingAssetIds.has(asset.assetId))
     .filter((asset) => assetMatchesQuery(asset, query))
-    .sort((a, b) => sortAssetsByValueDesc(a, b, state.values))
+    .sort((a, b) => sortAssetPickerOptions(a, b, state.values))
     .slice(0, 150);
 }
 
@@ -679,7 +696,7 @@ function getVisibleExcludedOutgoingAssets() {
   return meRoster.assets
     .filter((asset) => assetTypeAllowed(asset, state.outgoingFilters))
     .filter((asset) => assetMatchesQuery(asset, query))
-    .sort((a, b) => sortAssetsByValueDesc(a, b, state.values))
+    .sort((a, b) => sortAssetPickerOptions(a, b, state.values))
     .slice(0, 150);
 }
 
@@ -898,7 +915,7 @@ function updateExcludedAssetsSummary() {
 function buildAssetSelectLabel(asset) {
   const details = [];
   if (asset.assetType === "player") {
-    const position = playerPositionForAsset(asset);
+    const position = formatPlayerPositionLabel(asset);
     if (position) details.push(position);
     if (asset.raw?.team) details.push(asset.raw.team);
   }
@@ -911,7 +928,7 @@ function buildAssetSelectLabel(asset) {
 
 function buildAssetPickerMarkup(asset, { values, contextLabel } = {}) {
   const pills = [];
-  pills.push(`<span class="asset-pill ${asset.assetType === "pick" ? "gold" : ""}">${asset.assetType === "pick" ? "Pick" : playerPositionForAsset(asset) || "Player"}</span>`);
+  pills.push(`<span class="asset-pill ${asset.assetType === "pick" ? "gold" : ""}">${asset.assetType === "pick" ? "Pick" : formatPlayerPositionLabel(asset)}</span>`);
 
   if (asset.assetType === "player" && asset.raw?.age) {
     pills.push(`<span class="asset-pill">${asset.raw.age} yrs</span>`);
@@ -1942,6 +1959,7 @@ function suggestTrades({
           ideaStyle,
           coreAssetIds,
         });
+        if (!labDetails.viable) continue;
 
         rawIdeas.push({
           myAssets: myPackage.assets,
@@ -1965,7 +1983,12 @@ function suggestTrades({
 
   deduped.sort((a, b) => compareTradeIdeas(a, b));
 
-  return deduped.slice(0, maxResults);
+  return selectDiverseTradeIdeas(
+    deduped,
+    maxResults,
+    values,
+    tradeLab.selectedOutgoingAssetIds
+  );
 }
 
 function buildTradeSearchContext({ myRoster, targetAsset, values, fairnessPct, tradeLab }) {
@@ -2068,8 +2091,184 @@ function getEffectiveFairnessPct(fairnessPct, tradeVibe) {
   return fairnessPct + (vibeBuffer[tradeVibe] || 0);
 }
 
+function buildPackageProfile(assets, values) {
+  const entries = assets
+    .map((asset) => ({ asset, value: getAssetValue(asset, values) }))
+    .filter((entry) => Number.isFinite(entry.value))
+    .sort((a, b) => b.value - a.value || a.asset.name.localeCompare(b.asset.name));
+
+  const totalValue = entries.reduce((sum, entry) => sum + entry.value, 0);
+  const topValue = entries[0]?.value || 0;
+  const secondValue = entries[1]?.value || 0;
+
+  return {
+    entries,
+    totalValue,
+    topValue,
+    secondValue,
+    topTwoValue: topValue + secondValue,
+    packageSize: entries.length,
+    leadAssetId: entries[0]?.asset.assetId || "",
+    leadAssetValue: topValue,
+    topAssetIds: entries.slice(0, 2).map((entry) => entry.asset.assetId),
+  };
+}
+
+function getRequiredAnchorShare(targetValue, packageSize) {
+  if (!Number.isFinite(targetValue) || targetValue <= 0) return 0;
+
+  const baseShare = targetValue >= ELITE_TARGET_VALUE_THRESHOLD
+    ? ELITE_TARGET_ANCHOR_SHARE_BASE
+    : targetValue >= STAR_TARGET_VALUE_THRESHOLD
+      ? STAR_TARGET_ANCHOR_SHARE_BASE
+      : 0.34;
+
+  return Math.min(
+    MAX_TARGET_ANCHOR_SHARE,
+    baseShare + Math.max(0, packageSize - 2) * ANCHOR_SHARE_STEP_PER_EXTRA_ASSET
+  );
+}
+
+function calculateFragmentationTax(targetValue, packageProfile) {
+  const extraAssets = Math.max(0, packageProfile.packageSize - 1);
+  if (!extraAssets || !Number.isFinite(targetValue) || targetValue <= 0) return 0;
+
+  const perAssetTax = targetValue >= ELITE_TARGET_VALUE_THRESHOLD
+    ? ELITE_FRAGMENTATION_TAX_PER_EXTRA_ASSET
+    : targetValue >= STAR_TARGET_VALUE_THRESHOLD
+      ? STAR_FRAGMENTATION_TAX_PER_EXTRA_ASSET
+      : BASE_FRAGMENTATION_TAX_PER_EXTRA_ASSET;
+  const requiredAnchorShare = getRequiredAnchorShare(targetValue, packageProfile.packageSize);
+  const actualAnchorShare = packageProfile.topValue / targetValue;
+  const anchorGap = Math.max(0, requiredAnchorShare - actualAnchorShare);
+  const fillerFloor = Math.max(900, Math.round(targetValue * 0.14));
+  const fillerCount = packageProfile.entries.filter((entry, index) => index >= 2 && entry.value < fillerFloor).length;
+
+  return Math.round(
+    extraAssets * perAssetTax
+    + anchorGap * targetValue * 0.22
+    + fillerCount * 90
+  );
+}
+
+function evaluateTradeIdeaRealism({ targetAsset, myAssets, values }) {
+  const packageProfile = buildPackageProfile(myAssets, values);
+  const targetValue = getAssetValue(targetAsset, values);
+  const targetIsPlayer = targetAsset?.assetType === "player";
+
+  if (packageProfile.packageSize === 0) {
+    return { viable: false, packageProfile, packageTax: 0, scoreAdjustment: 0 };
+  }
+
+  if (!targetIsPlayer || !Number.isFinite(targetValue)) {
+    return { viable: true, packageProfile, packageTax: 0, scoreAdjustment: 0 };
+  }
+
+  const anchorShare = packageProfile.topValue / targetValue;
+  const secondShare = packageProfile.secondValue / targetValue;
+  const topTwoShare = packageProfile.topTwoValue / targetValue;
+  const requiredAnchorShare = getRequiredAnchorShare(targetValue, packageProfile.packageSize);
+  const strongAnchor = anchorShare >= requiredAnchorShare;
+  const premiumTwoForOne = packageProfile.packageSize <= 2 && topTwoShare >= 0.94 && secondShare >= 0.4;
+
+  if (targetValue >= ELITE_TARGET_VALUE_THRESHOLD && !strongAnchor && !premiumTwoForOne) {
+    return { viable: false, packageProfile, packageTax: 0, scoreAdjustment: 0 };
+  }
+
+  if (targetValue >= STAR_TARGET_VALUE_THRESHOLD && packageProfile.packageSize >= 4 && !strongAnchor) {
+    return { viable: false, packageProfile, packageTax: 0, scoreAdjustment: 0 };
+  }
+
+  let scoreAdjustment = 0;
+  if (strongAnchor) scoreAdjustment += 8;
+  if (premiumTwoForOne) scoreAdjustment += 6;
+  if (packageProfile.packageSize <= 2) scoreAdjustment += 4;
+  if (packageProfile.packageSize >= 4) scoreAdjustment -= (packageProfile.packageSize - 3) * 5;
+
+  return {
+    viable: true,
+    packageProfile,
+    packageTax: calculateFragmentationTax(targetValue, packageProfile),
+    scoreAdjustment,
+  };
+}
+
+function getComparableAssetIds(idea, lockedAssetIds = new Set()) {
+  return idea.myAssets
+    .map((asset) => asset.assetId)
+    .filter((assetId) => !lockedAssetIds.has(assetId));
+}
+
+function getDiversityLeadAssetId(idea, values, lockedAssetIds = new Set()) {
+  const unlockedProfile = buildPackageProfile(
+    idea.myAssets.filter((asset) => !lockedAssetIds.has(asset.assetId)),
+    values
+  );
+  return unlockedProfile.leadAssetId || idea.primaryAssetId || "";
+}
+
+function areTradeIdeasTooSimilar(candidate, picked, values, lockedAssetIds = new Set()) {
+  const candidateIds = getComparableAssetIds(candidate, lockedAssetIds);
+  const pickedIds = getComparableAssetIds(picked, lockedAssetIds);
+  if (candidateIds.length === 0 || pickedIds.length === 0) return false;
+
+  const pickedIdSet = new Set(pickedIds);
+  const sharedIds = candidateIds.filter((assetId) => pickedIdSet.has(assetId));
+  const overlapRatio = sharedIds.length / Math.min(candidateIds.length, pickedIds.length);
+
+  const candidateProfile = buildPackageProfile(
+    candidate.myAssets.filter((asset) => !lockedAssetIds.has(asset.assetId)),
+    values
+  );
+  const pickedProfile = buildPackageProfile(
+    picked.myAssets.filter((asset) => !lockedAssetIds.has(asset.assetId)),
+    values
+  );
+  const sharedValue = sharedIds.reduce((sum, assetId) => {
+    const match = candidateProfile.entries.find((entry) => entry.asset.assetId === assetId);
+    return sum + (match?.value || 0);
+  }, 0);
+  const overlapValueRatio = sharedValue / Math.max(1, Math.min(candidateProfile.totalValue, pickedProfile.totalValue));
+
+  const candidateLeadAssetId = getDiversityLeadAssetId(candidate, values, lockedAssetIds);
+  const pickedLeadAssetId = getDiversityLeadAssetId(picked, values, lockedAssetIds);
+  const sharedTopIds = candidateProfile.topAssetIds.filter((assetId) => pickedProfile.topAssetIds.includes(assetId));
+
+  if (candidateLeadAssetId && candidateLeadAssetId === pickedLeadAssetId && overlapRatio >= 0.34) return true;
+  if (sharedTopIds.length >= 2) return true;
+  if (overlapRatio >= PACKAGE_DIVERSITY_OVERLAP_RATIO) return true;
+  if (overlapValueRatio >= PACKAGE_DIVERSITY_VALUE_OVERLAP_RATIO) return true;
+  return false;
+}
+
+function selectDiverseTradeIdeas(ideas, maxResults, values, lockedAssetIds = new Set()) {
+  const selected = [];
+  const heldBack = [];
+
+  for (const idea of ideas) {
+    if (selected.some((picked) => areTradeIdeasTooSimilar(idea, picked, values, lockedAssetIds))) {
+      heldBack.push(idea);
+      continue;
+    }
+    selected.push(idea);
+    if (selected.length >= maxResults) return selected;
+  }
+
+  for (const idea of heldBack) {
+    if (selected.length >= maxResults) break;
+    selected.push(idea);
+  }
+
+  return selected;
+}
+
 function scoreTradeIdea({ myRoster, theirRoster, targetAsset, myAssets, theirAssets, values, pctDiff, tradeLab, ideaStyle, coreAssetIds = null }) {
-  const marketMyValue = calculatePerceivedPackageValue(myAssets, values, tradeLab);
+  const realism = evaluateTradeIdeaRealism({ targetAsset, myAssets, values });
+  if (!realism.viable) {
+    return { viable: false };
+  }
+
+  const marketMyValue = Math.max(0, calculatePerceivedPackageValue(myAssets, values, tradeLab) - realism.packageTax);
   const marketTheirValue = calculatePerceivedPackageValue(theirAssets, values, tradeLab);
   const marketDelta = marketMyValue - marketTheirValue;
   const resolvedCoreAssetIds = coreAssetIds || getCoreAssetIdSet(myRoster, values);
@@ -2085,6 +2284,7 @@ function scoreTradeIdea({ myRoster, theirRoster, targetAsset, myAssets, theirAss
   if (ideaStyle === "throw-in-back" && theirAssets.length > 1) labScore += 4;
   if (!exposesCore) labScore += 8;
   if (exposesCore) labScore -= 16;
+  labScore += realism.scoreAdjustment;
   labScore += getTeamStateScoreAdjustment({ targetAsset, myAssets, theirAssets, tradeLab });
   if (tradeLab.tradeVibe === "aggressive") labScore += 3;
   if (tradeLab.tradeVibe === "chaos") labScore += 6;
@@ -2103,10 +2303,14 @@ function scoreTradeIdea({ myRoster, theirRoster, targetAsset, myAssets, theirAss
   });
 
   return {
+    viable: true,
     labScore: clamp(Math.round(labScore), 1, 99),
     marketMyValue,
     marketTheirValue,
     marketDelta: Math.round(marketDelta),
+    primaryAssetId: realism.packageProfile.leadAssetId,
+    primaryAssetValue: realism.packageProfile.leadAssetValue,
+    topOutgoingAssetIds: realism.packageProfile.topAssetIds,
     tags: reasoning.tags,
     summary: reasoning.summary,
     pitch: reasoning.pitch,
@@ -2120,6 +2324,9 @@ function compareTradeIdeas(a, b) {
   const byDiff = Math.abs(a.pctDiff) - Math.abs(b.pctDiff);
   if (byDiff !== 0) return byDiff;
 
+  const byPrimaryAsset = (b.primaryAssetValue || 0) - (a.primaryAssetValue || 0);
+  if (byPrimaryAsset !== 0) return byPrimaryAsset;
+
   const byMarketDelta = b.marketDelta - a.marketDelta;
   if (byMarketDelta !== 0) return byMarketDelta;
 
@@ -2131,15 +2338,16 @@ function compareTradeIdeas(a, b) {
 
 function calculatePerceivedPackageValue(assets, values, tradeLab) {
   const total = assets.reduce((sum, asset) => sum + getPerceivedAssetValue(asset, values, tradeLab), 0);
-  let packageBonus = 0;
+  let packageAdjustment = 0;
 
   if (assets.length >= 2) {
-    if (tradeLab.tradeVibe === "aggressive") packageBonus += 70 * (assets.length - 1);
-    if (tradeLab.tradeVibe === "chaos") packageBonus += 120 * (assets.length - 1);
-    if (tradeLab.teamState === "contending") packageBonus += 40 * (assets.length - 1);
+    packageAdjustment -= 55 * (assets.length - 1);
+    if (tradeLab.tradeVibe === "aggressive") packageAdjustment += 20 * (assets.length - 1);
+    if (tradeLab.tradeVibe === "chaos") packageAdjustment += 35 * (assets.length - 1);
+    if (tradeLab.teamState === "contending") packageAdjustment -= 20 * (assets.length - 1);
   }
 
-  return Math.round(total + packageBonus);
+  return Math.round(total + packageAdjustment);
 }
 
 function getPerceivedAssetValue(asset, values, tradeLab) {
@@ -2523,7 +2731,7 @@ function getAssetValue(asset, values) {
 function formatAssetSecondaryLabel(asset, values) {
   const parts = [formatNumber(getAssetValue(asset, values))];
   if (asset.assetType === "player") {
-    const position = playerPositionForAsset(asset);
+    const position = formatPlayerPositionLabel(asset);
     if (position) parts.push(position);
     const age = playerAgeForAsset(asset);
     if (Number.isFinite(age)) parts.push(`${age}y`);
@@ -2536,8 +2744,55 @@ function formatAssetSecondaryLabel(asset, values) {
   return `(${parts.join(" • ")})`;
 }
 
+function playerPositionForRaw(raw) {
+  return (raw?.position || raw?.fantasy_positions?.[0] || "").toUpperCase();
+}
+
 function playerPositionForAsset(asset) {
-  return (asset?.raw?.position || asset?.raw?.fantasy_positions?.[0] || "").toUpperCase();
+  return playerPositionForRaw(asset?.raw);
+}
+
+function getPlayerPositionRankLabel(asset) {
+  if (asset?.assetType !== "player") return "";
+  return state.playerPositionRankByAssetId[asset.assetId] || "";
+}
+
+function formatPlayerPositionLabel(asset) {
+  return getPlayerPositionRankLabel(asset) || playerPositionForAsset(asset) || "Player";
+}
+
+function refreshPlayerPositionRanks() {
+  const groupedPlayers = new Map();
+
+  Object.entries(state.values).forEach(([assetId, value]) => {
+    if (!assetId.startsWith("player:") || !Number.isFinite(value)) return;
+
+    const playerId = assetId.slice("player:".length);
+    const player = state.players?.[playerId];
+    const position = playerPositionForRaw(player);
+    if (!position) return;
+
+    if (!groupedPlayers.has(position)) groupedPlayers.set(position, []);
+    groupedPlayers.get(position).push({
+      assetId,
+      value,
+      name: player?.full_name
+        || `${(player?.first_name || "").trim()} ${(player?.last_name || "").trim()}`.trim()
+        || state.valueNameMap[assetId]
+        || assetId,
+    });
+  });
+
+  const nextRankMap = {};
+  groupedPlayers.forEach((entries, position) => {
+    entries
+      .sort((a, b) => (b.value - a.value) || a.name.localeCompare(b.name) || a.assetId.localeCompare(b.assetId))
+      .forEach((entry, index) => {
+        nextRankMap[entry.assetId] = `${position}${index + 1}`;
+      });
+  });
+
+  state.playerPositionRankByAssetId = nextRankMap;
 }
 
 function playerAgeForAsset(asset) {
@@ -2846,6 +3101,7 @@ async function ensureValuesLoaded(optionalUrl = "") {
 function applyValuationBundle(bundle, { rerender = true } = {}) {
   state.values = bundle?.values && typeof bundle.values === "object" ? bundle.values : {};
   state.valueNameMap = bundle?.nameMap && typeof bundle.nameMap === "object" ? bundle.nameMap : {};
+  refreshPlayerPositionRanks();
   state.pickValueCatalog = buildPickValuationCatalog(state.values, state.valueNameMap);
   state.globalMaxPlayerValue = getGlobalMaxPlayerValue(state.values);
 
