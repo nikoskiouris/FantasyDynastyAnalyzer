@@ -1,5 +1,7 @@
 const API_BASE = "https://api.sleeper.app/v1";
 const SAMPLE_VALUES_PATH = "./data/ktc_values_sample.csv";
+const PLAYERS_CACHE_KEY = "fda_players_nfl_cache_v1";
+const PLAYERS_CACHE_TTL_MS = 1000 * 60 * 60 * 24;
 
 const state = {
   leagueId: "",
@@ -69,25 +71,74 @@ async function loadLeague() {
       apiGet(`/league/${leagueId}/rosters`),
     ]);
 
-    setStatus("Core league loaded. Pulling latest NFL player pool...", { loading: true });
-    const players = await apiGet(`/players/nfl`, { timeoutMs: 40000 });
-
     state.leagueId = leagueId;
     state.leagueName = league?.name || `League ${leagueId}`;
     state.users = users;
     state.rosters = rosters;
-    state.players = players;
-    state.normalizedRosters = normalizeRosters(rosters, users, players);
+    state.players = {};
+    state.normalizedRosters = normalizeRosters(rosters, users, state.players);
 
     hydrateManagerSelector();
     el.identitySection.classList.remove("hidden");
     el.playerSection.classList.remove("hidden");
     el.settingsSection.classList.remove("hidden");
-    setStatus(`Loaded ${state.leagueName}. Choose your team to continue.`, { ok: true });
+    setStatus(`Loaded ${state.leagueName}. Player names are still syncing...`, { loading: true });
+
+    loadPlayersWithCache()
+      .then((players) => {
+        state.players = players;
+        state.normalizedRosters = normalizeRosters(state.rosters, state.users, players);
+        hydrateManagerSelector();
+        setStatus(`Loaded ${state.leagueName}. Choose your team to continue.`, { ok: true });
+      })
+      .catch((err) => {
+        setStatus(
+          `Loaded ${state.leagueName}, but could not pull full NFL names (${err.message}). You can still use the app.`,
+          { ok: true }
+        );
+      });
   } catch (err) {
     setStatus(`Could not load league data. ${err.message}`);
   } finally {
     stopLeagueLoadingUi();
+  }
+}
+
+async function loadPlayersWithCache() {
+  const now = Date.now();
+  const fromCache = getPlayersCache();
+  if (fromCache && now - fromCache.savedAt < PLAYERS_CACHE_TTL_MS) {
+    return fromCache.players;
+  }
+
+  const players = await apiGet(`/players/nfl`, { timeoutMs: 30000 });
+  savePlayersCache(players, now);
+  return players;
+}
+
+function getPlayersCache() {
+  try {
+    const raw = localStorage.getItem(PLAYERS_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed?.players || !parsed?.savedAt) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function savePlayersCache(players, savedAt) {
+  try {
+    localStorage.setItem(
+      PLAYERS_CACHE_KEY,
+      JSON.stringify({
+        savedAt,
+        players,
+      })
+    );
+  } catch {
+    // Cache write failure is non-fatal (private mode/storage quota).
   }
 }
 
