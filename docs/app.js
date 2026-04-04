@@ -3,6 +3,8 @@ const SAMPLE_VALUES_PATH = "./data/ktc_values_sample.csv";
 const PLAYERS_CACHE_KEY = "fda_players_nfl_cache_v1";
 const PLAYERS_CACHE_TTL_MS = 1000 * 60 * 60 * 24;
 const DEFAULT_FAIRNESS_PCT = 20;
+const OUTGOING_POOL_LIMIT = 18;
+const MIN_OUTGOING_ASSET_VALUE = 450;
 const KTC_RAW_BASE = 0.10;
 const KTC_RAW_ELITE_WEIGHT = 0.04;
 const KTC_RAW_TRADE_WEIGHT = 0.09;
@@ -25,8 +27,11 @@ const state = {
   normalizedRosters: [],
   meRosterId: null,
   targetAsset: null,
+  valuationsPromise: null,
   values: {},
   valueNameMap: {},
+  pickValueCatalog: [],
+  globalMaxPlayerValue: KTC_GLOBAL_MAX_FALLBACK,
   targetFilters: {
     players: true,
     picks: false,
@@ -178,7 +183,6 @@ async function loadLeague() {
   state.targetAsset = null;
   state.selectedOutgoingAssetIds.clear();
   state.excludedOutgoingAssetIds.clear();
-  state.valueNameMap = {};
   if (el.includeAssetsToggle) el.includeAssetsToggle.checked = false;
   if (el.excludeAssetsToggle) el.excludeAssetsToggle.checked = false;
   if (el.includeAssetSearch) el.includeAssetSearch.value = "";
@@ -212,6 +216,7 @@ async function loadLeague() {
     el.marketSection.classList.remove("hidden");
     el.settingsSection.classList.remove("hidden");
     setStatus(`Loaded ${state.leagueName}. Player names are still syncing...`, { loading: true });
+    primeValuationData();
 
     loadPlayersWithCache()
       .then((players) => {
@@ -950,16 +955,13 @@ async function generateTradeIdeas() {
 
   try {
     setButtonLoading(el.generateBtn, true, "Building trade ideas...");
-    const valuationBundle = await loadValues("");
-    state.values = valuationBundle.values;
-    state.valueNameMap = valuationBundle.nameMap;
-    renderPlayerSearch();
-    renderOutgoingAssetSearch();
-
-    const leagueStrengthBaseline = buildLeagueStrengthBaseline({
-      league: state.league,
-      rosters: state.normalizedRosters,
+    await ensureValuesLoaded("");
+    const tradeSearchContext = buildTradeSearchContext({
+      myRoster: meRoster,
+      targetAsset: state.targetAsset,
       values: state.values,
+      fairnessPct,
+      tradeLab,
     });
 
     const directIdeas = suggestTrades({
@@ -972,6 +974,7 @@ async function generateTradeIdeas() {
       allowExtraTargetAssets: false,
       requireExtraTargetAsset: false,
       tradeLab,
+      searchContext: tradeSearchContext,
     });
     const throwInIdeas = suggestTrades({
       myRoster: meRoster,
@@ -983,6 +986,28 @@ async function generateTradeIdeas() {
       allowExtraTargetAssets: true,
       requireExtraTargetAsset: true,
       tradeLab,
+      searchContext: tradeSearchContext,
+    });
+    const totalIdeaCount = directIdeas.length + throwInIdeas.length;
+
+    el.resultsSection.classList.remove("hidden");
+    el.resultsSubtitle.textContent = buildResultsSubtitle({
+      meRoster,
+      theirRoster,
+      targetAsset: state.targetAsset,
+      tradeLab,
+    });
+
+    if (totalIdeaCount === 0) {
+      el.resultsList.innerHTML = `<p class="muted">${buildNoIdeasMessage(tradeLab)}</p>`;
+      el.resultsSection.scrollIntoView({ behavior: "smooth", block: "start" });
+      return;
+    }
+
+    const leagueStrengthBaseline = buildLeagueStrengthBaseline({
+      league: state.league,
+      rosters: state.normalizedRosters,
+      values: state.values,
     });
     const enrichedDirectIdeas = directIdeas.map((idea) => enrichTradeIdea({
       idea,
@@ -998,21 +1023,6 @@ async function generateTradeIdeas() {
       values: state.values,
       leagueStrengthBaseline,
     }));
-    const totalIdeaCount = enrichedDirectIdeas.length + enrichedThrowInIdeas.length;
-
-    el.resultsSection.classList.remove("hidden");
-    el.resultsSubtitle.textContent = buildResultsSubtitle({
-      meRoster,
-      theirRoster,
-      targetAsset: state.targetAsset,
-      tradeLab,
-    });
-
-    if (totalIdeaCount === 0) {
-      el.resultsList.innerHTML = `<p class="muted">${buildNoIdeasMessage(tradeLab)}</p>`;
-      el.resultsSection.scrollIntoView({ behavior: "smooth", block: "start" });
-      return;
-    }
 
     el.resultsList.innerHTML = [
       renderTradeIdeaGroup({
@@ -1627,7 +1637,9 @@ function formatRosterSlotLabel(slot) {
 function findClosestValuationPick(targetValue, values, valueNameMap) {
   if (!Number.isFinite(targetValue) || targetValue <= 0) return null;
 
-  const catalog = buildPickValuationCatalog(values, valueNameMap);
+  const catalog = state.pickValueCatalog.length > 0
+    ? state.pickValueCatalog
+    : buildPickValuationCatalog(values, valueNameMap);
   let closestPick = null;
 
   catalog.forEach((pick) => {
@@ -1713,19 +1725,22 @@ function suggestTrades({
   allowExtraTargetAssets,
   requireExtraTargetAsset = false,
   tradeLab,
+  searchContext = null,
 }) {
-  const targetValue = getAssetValue(targetAsset, values);
+  const targetValue = searchContext?.targetValue ?? getAssetValue(targetAsset, values);
   if (!Number.isFinite(targetValue)) return [];
 
-  const myAssetPool = resolveOutgoingAssetPool({ myRoster, values, tradeLab });
+  const coreAssetIds = searchContext?.coreAssetIds || getCoreAssetIdSet(myRoster, values);
+  const myAssetPool = searchContext?.myAssetPool
+    || resolveOutgoingAssetPool({ myRoster, values, tradeLab, targetValue, coreAssetIds });
   if (myAssetPool.length === 0) return [];
 
-  const globalMaxValue = getGlobalMaxPlayerValue(values, targetValue);
-  const myPackages = buildPackages(myAssetPool, values, 3);
+  const globalMaxValue = searchContext?.globalMaxValue ?? getGlobalMaxPlayerValue(values, targetValue);
+  const myPackages = searchContext?.myPackages || buildPackages(myAssetPool, values, 3);
   const theirPackages = buildTargetPackages({ theirRoster, targetAsset, values, allowExtraTargetAssets, maxExtraAssets: 1 }).filter(
     (pkg) => (requireExtraTargetAsset ? pkg.assets.length > 1 : pkg.assets.length === 1)
   );
-  const effectiveFairnessPct = getEffectiveFairnessPct(fairnessPct, tradeLab.tradeVibe);
+  const effectiveFairnessPct = searchContext?.effectiveFairnessPct ?? getEffectiveFairnessPct(fairnessPct, tradeLab.tradeVibe);
   const ideaStyle = requireExtraTargetAsset ? "throw-in-back" : "direct";
 
   const rawIdeas = [];
@@ -1748,6 +1763,7 @@ function suggestTrades({
           pctDiff,
           tradeLab,
           ideaStyle,
+          coreAssetIds,
         });
 
         rawIdeas.push({
@@ -1775,7 +1791,25 @@ function suggestTrades({
   return deduped.slice(0, maxResults);
 }
 
-function resolveOutgoingAssetPool({ myRoster, values, tradeLab }) {
+function buildTradeSearchContext({ myRoster, targetAsset, values, fairnessPct, tradeLab }) {
+  const targetValue = getAssetValue(targetAsset, values);
+  if (!Number.isFinite(targetValue)) return null;
+
+  const coreAssetIds = getCoreAssetIdSet(myRoster, values);
+  const myAssetPool = resolveOutgoingAssetPool({ myRoster, values, tradeLab, targetValue, coreAssetIds });
+  if (myAssetPool.length === 0) return null;
+
+  return {
+    targetValue,
+    coreAssetIds,
+    myAssetPool,
+    myPackages: buildPackages(myAssetPool, values, 3),
+    globalMaxValue: Math.max(state.globalMaxPlayerValue || KTC_GLOBAL_MAX_FALLBACK, targetValue),
+    effectiveFairnessPct: getEffectiveFairnessPct(fairnessPct, tradeLab.tradeVibe),
+  };
+}
+
+function resolveOutgoingAssetPool({ myRoster, values, tradeLab, targetValue = 0, coreAssetIds = null }) {
   let pool = myRoster.assets.filter((asset) =>
     !tradeLab.excludedOutgoingAssetIds.has(asset.assetId)
     && (
@@ -1788,8 +1822,8 @@ function resolveOutgoingAssetPool({ myRoster, values, tradeLab }) {
     return pool.filter((asset) => tradeLab.selectedOutgoingAssetIds.has(asset.assetId));
   }
 
-  const coreAssetIds = getCoreAssetIdSet(myRoster, values);
-  const nonCorePool = pool.filter((asset) => !coreAssetIds.has(asset.assetId));
+  const resolvedCoreAssetIds = coreAssetIds || getCoreAssetIdSet(myRoster, values);
+  const nonCorePool = pool.filter((asset) => !resolvedCoreAssetIds.has(asset.assetId));
   if (nonCorePool.length >= 3) {
     pool = nonCorePool;
   }
@@ -1801,7 +1835,44 @@ function resolveOutgoingAssetPool({ myRoster, values, tradeLab }) {
     }
   }
 
-  return pool;
+  return limitOutgoingAssetPool(pool, values, targetValue);
+}
+
+function limitOutgoingAssetPool(pool, values, targetValue) {
+  if (pool.length <= OUTGOING_POOL_LIMIT) return pool;
+
+  const usefulValueFloor = Math.max(MIN_OUTGOING_ASSET_VALUE, Math.round(targetValue * 0.14));
+  const prioritized = pool
+    .map((asset) => {
+      const value = getAssetValue(asset, values);
+      const relativeGap = targetValue > 0 ? Math.abs(value - targetValue) / targetValue : 0;
+      let score = Math.max(0, 1.35 - Math.min(relativeGap, 1.35)) * 1000;
+      score += Math.min(value, targetValue || value) * 0.02;
+      if (value >= usefulValueFloor) score += 200;
+      if (asset.assetType === "pick") score += isFirstRoundPick(asset) ? 160 : 40;
+      return { asset, value, score };
+    })
+    .sort((a, b) => b.score - a.score || b.value - a.value || a.asset.name.localeCompare(b.asset.name));
+
+  const kept = [];
+  const seenAssetIds = new Set();
+  const keepEntry = (entry) => {
+    if (!entry || seenAssetIds.has(entry.asset.assetId)) return;
+    kept.push(entry.asset);
+    seenAssetIds.add(entry.asset.assetId);
+  };
+
+  prioritized
+    .filter((entry) => entry.value >= usefulValueFloor || isFirstRoundPick(entry.asset))
+    .slice(0, OUTGOING_POOL_LIMIT)
+    .forEach(keepEntry);
+
+  for (const entry of prioritized) {
+    if (kept.length >= OUTGOING_POOL_LIMIT) break;
+    keepEntry(entry);
+  }
+
+  return kept;
 }
 
 function getEffectiveFairnessPct(fairnessPct, tradeVibe) {
@@ -1813,12 +1884,12 @@ function getEffectiveFairnessPct(fairnessPct, tradeVibe) {
   return fairnessPct + (vibeBuffer[tradeVibe] || 0);
 }
 
-function scoreTradeIdea({ myRoster, theirRoster, targetAsset, myAssets, theirAssets, values, pctDiff, tradeLab, ideaStyle }) {
+function scoreTradeIdea({ myRoster, theirRoster, targetAsset, myAssets, theirAssets, values, pctDiff, tradeLab, ideaStyle, coreAssetIds = null }) {
   const marketMyValue = calculatePerceivedPackageValue(myAssets, values, tradeLab);
   const marketTheirValue = calculatePerceivedPackageValue(theirAssets, values, tradeLab);
   const marketDelta = marketMyValue - marketTheirValue;
-  const coreAssetIds = getCoreAssetIdSet(myRoster, values);
-  const exposesCore = myAssets.some((asset) => coreAssetIds.has(asset.assetId));
+  const resolvedCoreAssetIds = coreAssetIds || getCoreAssetIdSet(myRoster, values);
+  const exposesCore = myAssets.some((asset) => resolvedCoreAssetIds.has(asset.assetId));
 
   let labScore = 82;
   labScore -= pctDiff * (tradeLab.tradeVibe === "chaos" ? 0.55 : tradeLab.tradeVibe === "aggressive" ? 0.8 : 1.1);
@@ -2465,6 +2536,50 @@ async function loadValues(optionalUrl) {
     return r.text();
   });
   return parseCsvValues(csvText);
+}
+
+function primeValuationData() {
+  ensureValuesLoaded("").catch((err) => {
+    console.warn("Could not preload valuation data", err);
+  });
+}
+
+async function ensureValuesLoaded(optionalUrl = "") {
+  if (optionalUrl) {
+    return applyValuationBundle(await loadValues(optionalUrl), { rerender: false });
+  }
+
+  if (Object.keys(state.values).length > 0 && state.pickValueCatalog.length > 0) {
+    return { values: state.values, nameMap: state.valueNameMap };
+  }
+
+  if (!state.valuationsPromise) {
+    state.valuationsPromise = loadValues("")
+      .then((bundle) => applyValuationBundle(bundle))
+      .catch((err) => {
+        state.valuationsPromise = null;
+        throw err;
+      });
+  }
+
+  return state.valuationsPromise;
+}
+
+function applyValuationBundle(bundle, { rerender = true } = {}) {
+  state.values = bundle?.values && typeof bundle.values === "object" ? bundle.values : {};
+  state.valueNameMap = bundle?.nameMap && typeof bundle.nameMap === "object" ? bundle.nameMap : {};
+  state.pickValueCatalog = buildPickValuationCatalog(state.values, state.valueNameMap);
+  state.globalMaxPlayerValue = getGlobalMaxPlayerValue(state.values);
+
+  if (rerender) {
+    renderPlayerSearch();
+    renderOutgoingAssetSearch();
+  }
+
+  return {
+    values: state.values,
+    nameMap: state.valueNameMap,
+  };
 }
 
 function parseCsvValues(csvText) {
