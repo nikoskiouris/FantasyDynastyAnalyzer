@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Fantasy Dynasty Analyzer</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="container">
+      <h1>Fantasy Dynasty Analyzer</h1>
+      <p class="muted">Connect your Sleeper league and generate fair-ish dynasty trade ideas in seconds.</p>
+
+      <section class="card">
+        <h2>1) Load league</h2>
+        <label for="league-id">Sleeper League ID</label>
+        <div class="row">
+          <input id="league-id" placeholder="Example: 1111111111111111111" />
+          <button id="load-league-btn">Load League</button>
+        </div>
+        <p id="league-status" class="status muted">Waiting for league ID.</p>
+      </section>
+
+      <section class="card hidden" id="identity-section">
+        <h2>2) Who are you?</h2>
+        <label for="me-select">Select your team manager name</label>
+        <select id="me-select"></select>
+      </section>
+
+      <section class="card hidden" id="player-section">
+        <h2>3) Which player do you want?</h2>
+        <label for="player-search">Search player on another roster</label>
+        <input id="player-search" placeholder="Start typing a player name..." />
+        <div id="player-results" class="list"></div>
+      </section>
+
+      <section class="card hidden" id="settings-section">
+        <h2>4) Generate offers</h2>
+        <div class="grid">
+          <label>
+            Fairness threshold (%)
+            <input id="fairness-input" type="number" min="1" max="50" value="20" />
+          </label>
+          <label>
+            Number of trade ideas
+            <input id="max-results-input" type="number" min="1" max="8" value="4" />
+          </label>
+          <label>
+            Optional KTC JSON URL
+            <input id="ktc-url-input" placeholder="https://.../values.json" />
+          </label>
+        </div>
+        <button id="generate-btn">Generate Trade Ideas</button>
+        <p class="muted small">Uses KTC-style values from your URL if provided, otherwise repo sample data + fallback estimates.</p>
+      </section>
+
+      <section class="card hidden" id="results-section">
+        <h2>Trade ideas</h2>
+        <p id="results-subtitle" class="muted"></p>
+        <div id="results-list"></div>
+      </section>
+    </main>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>
