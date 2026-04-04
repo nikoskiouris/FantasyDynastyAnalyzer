@@ -64,12 +64,22 @@ def main() -> int:
             return 0
 
         print(f"Suggested trades for {my_roster.manager.display_name} to acquire {target_asset.name} from {their_roster.manager.display_name}:")
-        for idx, s in enumerate(suggestions, start=1):
-            my_side = ", ".join(a.name for a in s.my_assets)
-            their_side = ", ".join(a.name for a in s.their_assets)
+        for idx, suggestion in enumerate(suggestions, start=1):
+            my_side = ", ".join(asset.name for asset in suggestion.my_assets)
+            their_side = ", ".join(asset.name for asset in suggestion.their_assets)
             print(f"\n{idx}. You send: {my_side}")
             print(f"   They send: {their_side}")
-            print(f"   Value: you {s.my_value} vs them {s.their_value} (diff {s.pct_diff}%)")
+            print(f"   Base value: you {suggestion.my_base_value} vs them {suggestion.their_base_value}")
+            if suggestion.package_adjustment:
+                side = "your side" if suggestion.package_adjustment_side == "my" else "their side"
+                print(f"   Package adjustment: +{suggestion.package_adjustment} on {side}")
+            else:
+                print("   Package adjustment: none")
+            print(
+                f"   KTC-style total: you {suggestion.my_adjusted_value} vs them {suggestion.their_adjusted_value} "
+                f"(diff {suggestion.pct_diff}%)"
+            )
+            print(f"   Add value to even: {suggestion.even_value}")
 
         return 0
     except ValidationError as exc:

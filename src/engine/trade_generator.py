@@ -11,8 +11,13 @@ from src.domain.valuation import ValuationService
 class TradeSuggestion:
     my_assets: list[Asset]
     their_assets: list[Asset]
-    my_value: int
-    their_value: int
+    my_base_value: int
+    their_base_value: int
+    my_adjusted_value: int
+    their_adjusted_value: int
+    package_adjustment: int
+    package_adjustment_side: str | None
+    even_value: int
     pct_diff: float
 
 
@@ -32,49 +37,59 @@ class TradeGenerator:
         if target_value is None:
             return []
 
+        valued_assets = [asset for asset in my_roster.assets if self.valuation.get_asset_value(asset.asset_id) is not None]
         candidates: list[TradeSuggestion] = []
 
-        for asset in my_roster.assets:
-            v = self.valuation.get_asset_value(asset.asset_id)
-            if v is None:
-                continue
-            candidates.extend(self._evaluate([asset], [target_asset], v, target_value))
-
-        valued_assets = [a for a in my_roster.assets if self.valuation.get_asset_value(a.asset_id) is not None]
-        for combo in combinations(valued_assets, 2):
-            my_value = sum(self.valuation.get_asset_value(a.asset_id) or 0 for a in combo)
-            candidates.extend(self._evaluate(list(combo), [target_asset], my_value, target_value))
+        for size in (1, 2, 3):
+            for combo in combinations(valued_assets, size):
+                candidates.extend(self._evaluate(list(combo), [target_asset]))
 
         unique = self._dedupe(candidates)
-        unique.sort(key=lambda t: (abs(t.pct_diff), len(t.my_assets), t.my_value - t.their_value))
+        unique.sort(key=lambda trade: (abs(trade.pct_diff), trade.even_value, len(trade.my_assets), abs(trade.package_adjustment)))
         return unique[:max_results]
 
-    def _evaluate(self, my_assets: list[Asset], their_assets: list[Asset], my_value: int, their_value: int) -> list[TradeSuggestion]:
-        if my_value == 0 or their_value == 0:
+    def _evaluate(self, my_assets: list[Asset], their_assets: list[Asset]) -> list[TradeSuggestion]:
+        my_values = [self.valuation.get_asset_value(asset.asset_id) for asset in my_assets]
+        their_values = [self.valuation.get_asset_value(asset.asset_id) for asset in their_assets]
+        if any(value is None for value in my_values) or any(value is None for value in their_values):
             return []
-        pct_diff = abs(my_value - their_value) / max(my_value, their_value) * 100
-        if pct_diff <= self.fairness_pct:
-            return [
-                TradeSuggestion(
-                    my_assets=my_assets,
-                    their_assets=their_assets,
-                    my_value=my_value,
-                    their_value=their_value,
-                    pct_diff=round(pct_diff, 2),
-                )
-            ]
-        return []
+
+        package = self.valuation.calculate_package_adjustment(
+            [int(value) for value in my_values if value is not None],
+            [int(value) for value in their_values if value is not None],
+        )
+        if package.my_adjusted_value == 0 or package.their_adjusted_value == 0:
+            return []
+
+        pct_diff = abs(package.my_adjusted_value - package.their_adjusted_value) / max(package.my_adjusted_value, package.their_adjusted_value) * 100
+        if pct_diff > self.fairness_pct:
+            return []
+
+        return [
+            TradeSuggestion(
+                my_assets=my_assets,
+                their_assets=their_assets,
+                my_base_value=package.my_base_value,
+                their_base_value=package.their_base_value,
+                my_adjusted_value=package.my_adjusted_value,
+                their_adjusted_value=package.their_adjusted_value,
+                package_adjustment=package.package_adjustment,
+                package_adjustment_side=package.package_adjustment_side,
+                even_value=package.even_value,
+                pct_diff=round(pct_diff, 2),
+            )
+        ]
 
     def _dedupe(self, suggestions: list[TradeSuggestion]) -> list[TradeSuggestion]:
         seen: set[tuple] = set()
         out: list[TradeSuggestion] = []
-        for s in suggestions:
+        for suggestion in suggestions:
             key = (
-                tuple(sorted(a.asset_id for a in s.my_assets)),
-                tuple(sorted(a.asset_id for a in s.their_assets)),
+                tuple(sorted(asset.asset_id for asset in suggestion.my_assets)),
+                tuple(sorted(asset.asset_id for asset in suggestion.their_assets)),
             )
             if key in seen:
                 continue
             seen.add(key)
-            out.append(s)
+            out.append(suggestion)
         return out
