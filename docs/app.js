@@ -1,5 +1,7 @@
 const API_BASE = "https://api.sleeper.app/v1";
 const SAMPLE_VALUES_PATH = "./data/ktc_values_sample.csv";
+const PLAYERS_CACHE_KEY = "fda_players_nfl_cache_v1";
+const PLAYERS_CACHE_TTL_MS = 1000 * 60 * 60 * 24;
 
 const state = {
   leagueId: "",
@@ -16,6 +18,8 @@ const state = {
 const el = {
   leagueId: document.querySelector("#league-id"),
   loadLeagueBtn: document.querySelector("#load-league-btn"),
+  copyLeagueIdBtn: document.querySelector("#copy-league-id-btn"),
+  copyLeagueIdFeedback: document.querySelector("#copy-league-id-feedback"),
   leagueStatus: document.querySelector("#league-status"),
   leagueStatusText: document.querySelector("#league-status-text"),
   leagueStatusLoader: document.querySelector("#league-status-loader"),
@@ -35,6 +39,7 @@ const el = {
 };
 
 el.loadLeagueBtn.addEventListener("click", loadLeague);
+el.copyLeagueIdBtn?.addEventListener("click", copyHelperLeagueId);
 el.playerSearch.addEventListener("input", renderPlayerSearch);
 el.meSelect.addEventListener("change", () => {
   state.meRosterId = Number(el.meSelect.value);
@@ -44,12 +49,7 @@ el.generateBtn.addEventListener("click", generateTradeIdeas);
 
 let leagueLoadAnimationTimer = null;
 let leagueLoadStartedAt = 0;
-const loadingMessages = [
-  "Contacting Sleeper HQ",
-  "Syncing rosters",
-  "Building player universe",
-  "Crunching trade matrix",
-];
+let copyFeedbackTimer = null;
 
 async function loadLeague() {
   const leagueId = el.leagueId.value.trim();
@@ -63,31 +63,180 @@ async function loadLeague() {
   state.resultsList.innerHTML = "";
 
   try {
-    const [league, users, rosters] = await Promise.all([
-      apiGet(`/league/${leagueId}`),
-      apiGet(`/league/${leagueId}/users`),
-      apiGet(`/league/${leagueId}/rosters`),
-    ]);
-
-    setStatus("Core league loaded. Pulling latest NFL player pool...", { loading: true });
-    const players = await apiGet(`/players/nfl`, { timeoutMs: 40000 });
+    const [league, users, rosters] = await loadLeagueCoreData(leagueId);
 
     state.leagueId = leagueId;
     state.leagueName = league?.name || `League ${leagueId}`;
     state.users = users;
     state.rosters = rosters;
-    state.players = players;
-    state.normalizedRosters = normalizeRosters(rosters, users, players);
+    state.players = {};
+    state.normalizedRosters = normalizeRosters(rosters, users, state.players);
 
     hydrateManagerSelector();
     el.identitySection.classList.remove("hidden");
     el.playerSection.classList.remove("hidden");
     el.settingsSection.classList.remove("hidden");
-    setStatus(`Loaded ${state.leagueName}. Choose your team to continue.`, { ok: true });
+    setStatus(`Loaded ${state.leagueName}. Player names are still syncing...`, { loading: true });
+
+    loadPlayersWithCache()
+      .then((players) => {
+        state.players = players;
+        state.normalizedRosters = normalizeRosters(state.rosters, state.users, players);
+        hydrateManagerSelector();
+        setStatus(`Loaded ${state.leagueName}. Choose your team to continue.`, { ok: true });
+      })
+      .catch((err) => {
+        setStatus(
+          `Loaded ${state.leagueName}, but could not pull full NFL names (${err.message}). You can still use the app.`,
+          { ok: true }
+        );
+      });
   } catch (err) {
     setStatus(`Could not load league data. ${err.message}`);
   } finally {
     stopLeagueLoadingUi();
+  }
+}
+
+async function copyHelperLeagueId() {
+  const leagueId = el.copyLeagueIdBtn?.textContent?.trim();
+  if (!leagueId) return;
+
+  let copied = false;
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(leagueId);
+      copied = true;
+    }
+  } catch {
+    copied = false;
+  }
+
+  if (!copied) {
+    try {
+      const tempInput = document.createElement("input");
+      tempInput.value = leagueId;
+      tempInput.style.position = "absolute";
+      tempInput.style.left = "-9999px";
+      document.body.appendChild(tempInput);
+      tempInput.select();
+      copied = document.execCommand("copy");
+      document.body.removeChild(tempInput);
+    } catch {
+      copied = false;
+    }
+  }
+
+  showCopyFeedback(copied ? "Copied!" : "Copy failed");
+}
+
+function showCopyFeedback(text) {
+  if (!el.copyLeagueIdFeedback) return;
+  el.copyLeagueIdFeedback.textContent = text;
+  el.copyLeagueIdFeedback.classList.remove("hidden");
+
+  clearTimeout(copyFeedbackTimer);
+  copyFeedbackTimer = setTimeout(() => {
+    el.copyLeagueIdFeedback.classList.add("hidden");
+  }, 1500);
+}
+
+async function loadLeagueCoreData(leagueId) {
+  const endpointPlan = [
+    { key: "league", label: "league profile", path: `/league/${leagueId}` },
+    { key: "users", label: "league managers", path: `/league/${leagueId}/users` },
+    { key: "rosters", label: "league rosters", path: `/league/${leagueId}/rosters` },
+  ];
+
+  const tasks = endpointPlan.map(async (endpoint) => {
+    setStatus(`Loading ${endpoint.label}...`, { loading: true });
+    const payload = await apiGetWithRetry(endpoint.path, { timeoutMs: 12000, retries: 1 });
+    return { key: endpoint.key, payload };
+  });
+
+  const settled = await Promise.allSettled(tasks);
+  const byKey = {};
+  const failures = [];
+
+  settled.forEach((result, idx) => {
+    const endpoint = endpointPlan[idx];
+    if (result.status === "fulfilled") {
+      byKey[result.value.key] = result.value.payload;
+    } else {
+      failures.push(`${endpoint.label} (${result.reason?.message || "unknown error"})`);
+    }
+  });
+
+  if (failures.length > 0) {
+    throw new Error(`Failed to load: ${failures.join("; ")}`);
+  }
+
+  return [byKey.league, byKey.users, byKey.rosters];
+}
+
+async function loadPlayersWithCache() {
+  const now = Date.now();
+  const fromCache = getPlayersCache();
+  let stateKey = null;
+
+  try {
+    const nflState = await apiGetWithRetry(`/state/nfl`, { timeoutMs: 8000, retries: 1 });
+    stateKey = `${nflState?.season || "na"}-${nflState?.league_season || "na"}-${nflState?.week || "na"}`;
+    if (fromCache?.players && fromCache?.stateKey === stateKey) return fromCache.players;
+  } catch {
+    if (fromCache && now - fromCache.savedAt < PLAYERS_CACHE_TTL_MS) {
+      return fromCache.players;
+    }
+  }
+
+  const players = await apiGet(`/players/nfl`, { timeoutMs: 30000 });
+  savePlayersCache(players, now, stateKey);
+  return players;
+}
+
+async function apiGetWithRetry(path, { timeoutMs = 25000, retries = 0 } = {}) {
+  let lastError = null;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await apiGet(path, { timeoutMs });
+    } catch (err) {
+      lastError = err;
+      if (attempt < retries) {
+        await sleep(250 * (attempt + 1));
+      }
+    }
+  }
+  throw lastError;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function getPlayersCache() {
+  try {
+    const raw = localStorage.getItem(PLAYERS_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed?.players || !parsed?.savedAt) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function savePlayersCache(players, savedAt, stateKey = null) {
+  try {
+    localStorage.setItem(
+      PLAYERS_CACHE_KEY,
+      JSON.stringify({
+        savedAt,
+        stateKey,
+        players,
+      })
+    );
+  } catch {
+    // Cache write failure is non-fatal (private mode/storage quota).
   }
 }
 
@@ -355,22 +504,40 @@ function coerceValueMap(payload) {
 
 async function apiGet(path, { timeoutMs = 25000 } = {}) {
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  const abortTimeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    const response = await fetch(`${API_BASE}${path}`, { signal: controller.signal });
+    const response = await withTimeout(fetch(`${API_BASE}${path}`, { signal: controller.signal, cache: "no-store" }), timeoutMs + 1500, `Request timed out after ${Math.round(timeoutMs / 1000)}s`);
     if (!response.ok) {
       throw new Error(`Sleeper API returned ${response.status}`);
     }
-    return response.json();
+    return await withTimeout(response.json(), timeoutMs + 1500, "Sleeper API response parse timed out");
   } catch (err) {
     if (err.name === "AbortError") {
       throw new Error(`Sleeper API timed out after ${Math.round(timeoutMs / 1000)}s`);
     }
+    if (err instanceof TypeError) {
+      throw new Error("Network/CORS error while contacting Sleeper API");
+    }
     throw err;
   } finally {
-    clearTimeout(timeoutId);
+    clearTimeout(abortTimeoutId);
   }
+}
+
+function withTimeout(promise, timeoutMs, message) {
+  return new Promise((resolve, reject) => {
+    const id = setTimeout(() => reject(new Error(message)), timeoutMs);
+    promise
+      .then((value) => {
+        clearTimeout(id);
+        resolve(value);
+      })
+      .catch((err) => {
+        clearTimeout(id);
+        reject(err);
+      });
+  });
 }
 
 function setStatus(message, { ok = false, loading = false } = {}) {
@@ -385,14 +552,12 @@ function startLeagueLoadingUi() {
   el.loadLeagueBtn.textContent = "Loading...";
 
   leagueLoadStartedAt = Date.now();
-  let idx = 0;
-  setStatus(`${loadingMessages[idx]}...`, { loading: true });
+  setStatus("Loading Sleeper data...", { loading: true });
 
   clearInterval(leagueLoadAnimationTimer);
   leagueLoadAnimationTimer = setInterval(() => {
-    idx = (idx + 1) % loadingMessages.length;
     const elapsedSec = Math.floor((Date.now() - leagueLoadStartedAt) / 1000);
-    setStatus(`${loadingMessages[idx]} • ${elapsedSec}s`, { loading: true });
+    setStatus(`Loading Sleeper data • ${elapsedSec}s`, { loading: true });
   }, 850);
 }
 
