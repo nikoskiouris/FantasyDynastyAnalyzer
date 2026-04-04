@@ -165,11 +165,11 @@ function renderSessionSnapshot() {
       if (state.excludedOutgoingAssetIds.size > 0) {
         notes.push(`${state.excludedOutgoingAssetIds.size} protected`);
       }
-      el.snapshotPool.textContent = notes.join(" / ");
+      el.snapshotPool.textContent = notes.join(" • ");
     } else if (state.leagueName) {
-      el.snapshotPool.textContent = "Builder picks the package";
+      el.snapshotPool.textContent = "Automatic";
     } else {
-      el.snapshotPool.textContent = "Optional shortlist";
+      el.snapshotPool.textContent = "Automatic";
     }
   }
 }
@@ -511,7 +511,7 @@ function renderPlayerSearch() {
   el.playerResults.innerHTML = "";
 
   if (candidates.length === 0) {
-    el.playerResults.innerHTML = `<div class="player-item muted">No matching players found on other rosters.</div>`;
+    el.playerResults.innerHTML = `<div class="player-item muted">No matching players or picks found.</div>`;
     if (snapshotNeedsRefresh) renderSessionSnapshot();
     return;
   }
@@ -666,7 +666,7 @@ function renderOutgoingAssetSearch() {
     row.className = `player-item ${selected ? "selected" : ""}`;
     row.innerHTML = buildAssetPickerMarkup(asset, {
       values: state.values,
-      contextLabel: selected ? "Selected for your side" : "Tap to include on your side",
+      contextLabel: selected ? "Included in offers" : "",
       emphasisTags: getProtectionTags(asset, meRoster, state.values),
     });
     row.addEventListener("click", () => toggleOutgoingAsset(asset.assetId));
@@ -758,12 +758,12 @@ function updateSelectedAssetsSummary() {
   if (!el.selectedAssetsSummary) return;
 
   if (state.selectedOutgoingAssetIds.size > 0) {
-    el.selectedAssetsSummary.textContent = `${state.selectedOutgoingAssetIds.size} exact piece${state.selectedOutgoingAssetIds.size === 1 ? "" : "s"} selected. Trade ideas will only use these included assets.`;
+    el.selectedAssetsSummary.textContent = `Using ${state.selectedOutgoingAssetIds.size} included asset${state.selectedOutgoingAssetIds.size === 1 ? "" : "s"} only.`;
     renderSessionSnapshot();
     return;
   }
 
-  el.selectedAssetsSummary.textContent = "Optional. Leave this blank and the builder can use players or picks while avoiding your highest-value core pieces.";
+  el.selectedAssetsSummary.textContent = "Leave this blank to let the builder choose from any unprotected asset.";
   renderSessionSnapshot();
 }
 
@@ -771,12 +771,12 @@ function updateExcludedAssetsSummary() {
   if (!el.excludedAssetsSummary) return;
 
   if (state.excludedOutgoingAssetIds.size > 0) {
-    el.excludedAssetsSummary.textContent = `${state.excludedOutgoingAssetIds.size} protected piece${state.excludedOutgoingAssetIds.size === 1 ? "" : "s"} will stay off your side of every trade idea.`;
+    el.excludedAssetsSummary.textContent = `${state.excludedOutgoingAssetIds.size} protected asset${state.excludedOutgoingAssetIds.size === 1 ? "" : "s"} removed from every idea.`;
     renderSessionSnapshot();
     return;
   }
 
-  el.excludedAssetsSummary.textContent = "Optional. Protected assets stay out of generated trade ideas.";
+  el.excludedAssetsSummary.textContent = "Protected assets stay out of every generated idea.";
   renderSessionSnapshot();
 }
 
@@ -826,10 +826,10 @@ function buildAssetPickerMarkup(asset, { values, contextLabel, emphasisTags = []
 function getProtectionTags(asset, myRoster, values) {
   const tags = [];
   if (getCoreAssetIdSet(myRoster, values).has(asset.assetId)) {
-    tags.push("Core piece");
+    tags.push("Core");
   }
   if (isFirstRoundPick(asset)) {
-    tags.push("1st-round pick");
+    tags.push("1st");
   }
   return tags;
 }
@@ -938,23 +938,22 @@ function getTradeLabSettings() {
 function buildResultsSubtitle({ meRoster, theirRoster, targetAsset, tradeLab }) {
   const notes = [];
   notes.push(`${getTeamStateLabel(tradeLab.teamState)} lens`);
-  notes.push(`${tradeLab.tradeVibe} room`);
   if (tradeLab.positionPremium !== "none") notes.push(`${tradeLab.positionPremium} premium`);
   if (tradeLab.selectedOutgoingAssetIds.size > 0) {
-    notes.push(`${tradeLab.selectedOutgoingAssetIds.size} hand-picked asset${tradeLab.selectedOutgoingAssetIds.size === 1 ? "" : "s"}`);
+    notes.push(`${tradeLab.selectedOutgoingAssetIds.size} included`);
   }
   if (tradeLab.excludedOutgoingAssetIds.size > 0) {
-    notes.push(`${tradeLab.excludedOutgoingAssetIds.size} protected asset${tradeLab.excludedOutgoingAssetIds.size === 1 ? "" : "s"}`);
+    notes.push(`${tradeLab.excludedOutgoingAssetIds.size} protected`);
   }
   return `${meRoster.manager.displayName} targeting ${targetAsset.name} from ${theirRoster.manager.displayName} • ${notes.join(" • ")}`;
 }
 
 function buildNoIdeasMessage(tradeLab) {
   const advice = [];
-  if (tradeLab.selectedOutgoingAssetIds.size > 0) advice.push("leave the include list blank or include more pieces");
+  if (tradeLab.selectedOutgoingAssetIds.size > 0) advice.push("remove the include lock or add more assets");
   if (tradeLab.excludedOutgoingAssetIds.size > 0) advice.push("protect fewer assets");
   advice.push("change the target");
-  advice.push("try a different team-state lens");
+  advice.push("try a different team lens");
   return `No trade ideas cleared the value and fit checks. Try to ${advice.join(", ")}.`;
 }
 
@@ -979,11 +978,11 @@ function renderTradeCard(idea, index, values) {
     <article class="trade-card">
       <div class="trade-card-header">
         <div>
-          <h3>Idea ${index + 1}</h3>
+          <h3>Offer ${index + 1}</h3>
           <p class="trade-style-label">${idea.styleLabel}</p>
           <p class="muted small">${idea.summary}</p>
         </div>
-        <span class="trade-score">Trade Lab ${idea.labScore}</span>
+        <span class="trade-score">Score ${idea.labScore}</span>
       </div>
       <div class="trade-tag-row">
         ${idea.tags.map((tag) => `<span class="trade-tag">${tag}</span>`).join("")}
@@ -1016,7 +1015,7 @@ function renderTradeCard(idea, index, values) {
           ${formatNumber(idea.evenValue)}
         </div>
       </div>
-      <p class="trade-pitch"><strong>Pitch:</strong> ${idea.pitch}</p>
+      <p class="trade-pitch"><strong>Suggested message:</strong> ${idea.pitch}</p>
     </article>
   `;
 }
@@ -1281,15 +1280,15 @@ function buildTradeReasoning({
 
   const summary = notes.slice(0, 2).join(". ").replace(/\.$/, "") || "clean starter package with enough market logic to open the conversation";
 
-  let pitch = `Open with: “I’m trying to get to ${targetAsset.name} without wasting your time. This gives you ${myAssets.length > 1 ? `${myAssets.length} usable pieces` : "real value"} and keeps it close to market.”`;
+  let pitch = `I'm trying to get to ${targetAsset.name} without wasting your time. This gives you ${myAssets.length > 1 ? `${myAssets.length} usable pieces` : "real value"} and keeps it close to market.`;
   if (tradeLab.positionPremium !== "none" && myAssets.some((asset) => playerPositionForAsset(asset) === tradeLab.positionPremium)) {
-    pitch = `Open with: “I know ${tradeLab.positionPremium}s carry extra juice in this league, so I built this around that premium instead of random filler.”`;
+    pitch = `I know ${tradeLab.positionPremium}s carry extra juice in this league, so I built this around that premium instead of random filler.`;
   } else if (tradeLab.teamState === "rebuilding") {
-    pitch = `Open with: “I’m willing to move some win-now value, but I want the return to make sense for a younger timeline around ${targetAsset.name}.”`;
+    pitch = `I'm willing to move some win-now value, but I want the return to make sense for a younger timeline around ${targetAsset.name}.`;
   } else if (tradeLab.teamState === "contending") {
-    pitch = `Open with: “I’m trying to turn extra depth and future insulation into a starter I can actually use, and this keeps the value honest.”`;
+    pitch = `I'm trying to turn extra depth and future insulation into a starter I can actually use, and this keeps the value honest.`;
   } else if (ideaStyle === "throw-in-back" && theirAssets.length > 1) {
-    pitch = `Open with: “I’m good paying for ${targetAsset.name}, but I’d want the small add-on back so the deal lands closer to neutral for both sides.”`;
+    pitch = `I'm good paying for ${targetAsset.name}, but I'd want the small add-on back so the deal lands closer to neutral for both sides.`;
   }
 
   return {

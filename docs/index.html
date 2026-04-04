@@ -4,68 +4,50 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Fantasy Dynasty Analyzer</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&amp;family=Space+Grotesk:wght@400;500;700&amp;display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
     <div class="page-shell">
       <main class="container">
-        <section class="hero">
-          <div class="hero-copy">
-            <p class="eyebrow">Front Office Trade Studio</p>
-            <h1>Fantasy Dynasty Analyzer</h1>
-            <p class="hero-lede">Connect your Sleeper league, pick your team, name your target, note anything you would move, and get trade ideas that actually fit your room.</p>
-            <div class="hero-pill-row">
-              <span class="hero-pill">Sleeper live data</span>
-              <span class="hero-pill">Market-fit scoring</span>
-              <span class="hero-pill">Static GitHub Pages app</span>
-            </div>
+        <header class="app-header">
+          <div class="app-header-copy">
+            <p class="eyebrow">Fantasy Dynasty Analyzer</p>
+            <h1>Build trade ideas without the noise.</h1>
+            <p class="hero-lede">Load your Sleeper league, choose your roster, pick a target, and generate a short list of realistic offers.</p>
           </div>
-          <aside class="hero-panel">
-            <div class="section-kicker">
-              <span class="step-badge neutral">Now</span>
-              <span class="eyebrow">Session Snapshot</span>
-            </div>
-            <h2>Current board</h2>
-            <div class="snapshot-grid">
-              <article class="snapshot-card">
-                <span class="snapshot-label">League</span>
-                <strong id="snapshot-league">Waiting for load</strong>
-              </article>
-              <article class="snapshot-card">
-                <span class="snapshot-label">You</span>
-                <strong id="snapshot-manager">Choose after load</strong>
-              </article>
-              <article class="snapshot-card">
-                <span class="snapshot-label">Want</span>
-                <strong id="snapshot-target">No target yet</strong>
-              </article>
-              <article class="snapshot-card">
-                <span class="snapshot-label">Your Side</span>
-                <strong id="snapshot-pool">Optional shortlist</strong>
-              </article>
-            </div>
+          <aside class="app-header-note">
+            <p class="app-header-label">Simple workflow</p>
+            <p class="muted">Use the include list only when you want exact pieces. Otherwise the builder can work from your roster while keeping protected assets out.</p>
           </aside>
-        </section>
+        </header>
 
-        <section class="workflow-banner">
-          <div>
-            <p class="eyebrow">Workflow</p>
-            <h2>Who you are, what you want, what you would move or protect</h2>
-          </div>
-          <p class="muted">Load the league, choose your team, pick a target, optionally shortlist pieces to include on your side, protect the ones you will not move, add league context, and generate ideas.</p>
+        <section class="summary-strip" aria-label="Session summary">
+          <article class="snapshot-card">
+            <span class="snapshot-label">League</span>
+            <strong id="snapshot-league">Waiting for load</strong>
+          </article>
+          <article class="snapshot-card">
+            <span class="snapshot-label">You</span>
+            <strong id="snapshot-manager">Choose after load</strong>
+          </article>
+          <article class="snapshot-card">
+            <span class="snapshot-label">Target</span>
+            <strong id="snapshot-target">No target yet</strong>
+          </article>
+          <article class="snapshot-card">
+            <span class="snapshot-label">Offer pool</span>
+            <strong id="snapshot-pool">Automatic</strong>
+          </article>
         </section>
 
         <section class="card stage-card stage-lead">
           <div class="section-heading">
             <div class="section-kicker">
               <span class="step-badge">01</span>
-              <span class="eyebrow">League Setup</span>
+              <span class="eyebrow">League</span>
             </div>
             <h2>Load league</h2>
-            <p class="section-copy">Drop in a Sleeper league ID to pull the room and start the board.</p>
+            <p class="section-copy">Enter a Sleeper league ID to pull rosters and start the board.</p>
           </div>
           <label for="league-id">Sleeper League ID</label>
           <div class="row">
@@ -73,7 +55,7 @@
             <button id="load-league-btn" type="button">Load League</button>
           </div>
           <p class="muted small helper-row">
-            Try Hard or Die Hard Id:
+            Sample league ID:
             <button id="copy-league-id-btn" type="button" class="linklike" title="Copy league ID to clipboard">1315165104303513600</button>
             <span id="copy-league-id-feedback" class="feedback-chip hidden">Copied!</span>
           </p>
@@ -87,10 +69,10 @@
           <div class="section-heading">
             <div class="section-kicker">
               <span class="step-badge">02</span>
-              <span class="eyebrow">Identity</span>
+              <span class="eyebrow">Your Team</span>
             </div>
             <h2>Who are you?</h2>
-            <p class="section-copy">Pick the roster you control so the trade lab knows which side to build.</p>
+            <p class="section-copy">Choose the roster you manage.</p>
           </div>
           <label for="me-select">Select your team manager name</label>
           <select id="me-select"></select>
@@ -103,7 +85,7 @@
               <span class="eyebrow">Target</span>
             </div>
             <h2>Who do you want?</h2>
-            <p class="section-copy">Search another roster and pick the player you want to trade for.</p>
+            <p class="section-copy">Search the rest of the league and choose the player or pick you want back.</p>
           </div>
           <label for="player-search">Search players on other rosters</label>
           <input id="player-search" placeholder="Start typing a player name..." />
@@ -113,25 +95,25 @@
         <section class="card stage-card hidden trade-lab" id="builder-section">
           <div class="section-heading">
             <div class="section-kicker">
-              <span class="step-badge">Your Side</span>
-              <span class="eyebrow">Builder</span>
+              <span class="step-badge">04</span>
+              <span class="eyebrow">Your Side</span>
             </div>
-            <h2>What can go on your side?</h2>
-            <p class="section-copy">Select exact players or picks you want included in offers, and protect anything you do not want to give up.</p>
+            <h2>Choose what can go into offers</h2>
+            <p class="section-copy">Optionally lock the builder to exact assets and protect anything that should stay off the table.</p>
           </div>
-          <label for="my-asset-search">Choose players or picks you do want to include</label>
-          <input id="my-asset-search" placeholder="Search your roster for include candidates..." />
+          <label for="my-asset-search">Include only these players or picks</label>
+          <input id="my-asset-search" placeholder="Search your roster" />
           <div class="builder-toolbar">
             <button id="clear-selected-assets-btn" type="button" class="secondary-btn">Clear included</button>
             <button id="clear-excluded-assets-btn" type="button" class="secondary-btn">Clear protected</button>
           </div>
-          <p id="selected-assets-summary" class="selection-summary muted small">Optional. Leave this blank and the builder can use players or picks while avoiding your highest-value core pieces.</p>
+          <p id="selected-assets-summary" class="selection-summary muted small">Leave this blank to let the builder choose from any unprotected asset.</p>
           <div id="my-asset-results" class="list"></div>
-          <label for="exclude-asset-select">Protect players or picks you do not want to give up</label>
+          <label for="exclude-asset-select">Protect players or picks</label>
           <select id="exclude-asset-select">
             <option value="">Choose your team first.</option>
           </select>
-          <p id="excluded-assets-summary" class="selection-summary muted small">Optional. Protected assets stay out of generated trade ideas.</p>
+          <p id="excluded-assets-summary" class="selection-summary muted small">Protected assets stay out of every generated idea.</p>
           <div id="excluded-assets-list" class="selection-chip-list">
             <p class="muted small">No protected assets yet.</p>
           </div>
@@ -141,10 +123,10 @@
           <div class="section-heading">
             <div class="section-kicker">
               <span class="step-badge">05</span>
-              <span class="eyebrow">League Mood</span>
+              <span class="eyebrow">League Settings</span>
             </div>
             <h2>Read your league room</h2>
-            <p class="section-copy">Set the few things that actually change value in your league.</p>
+            <p class="section-copy">Set the few league tendencies that matter.</p>
           </div>
           <div class="grid">
             <label>
@@ -180,10 +162,10 @@
           <div class="section-heading">
             <div class="section-kicker">
               <span class="step-badge">06</span>
-              <span class="eyebrow">Ideas</span>
+              <span class="eyebrow">Generate</span>
             </div>
             <h2>How many ideas do you want?</h2>
-            <p class="section-copy">You will get that many direct offers, then that many versions with a small throw-in back from their side.</p>
+            <p class="section-copy">You will get that many direct offers, plus the same number with a small add-on back from their side.</p>
           </div>
           <div class="grid">
             <label>
@@ -198,8 +180,8 @@
         <section class="card stage-card hidden results-shell" id="results-section">
           <div class="section-heading">
             <div class="section-kicker">
-              <span class="step-badge accent">Ready</span>
-              <span class="eyebrow">Trade Lab Output</span>
+              <span class="step-badge accent">07</span>
+              <span class="eyebrow">Results</span>
             </div>
             <h2>Trade ideas</h2>
             <p id="results-subtitle" class="muted section-copy"></p>
