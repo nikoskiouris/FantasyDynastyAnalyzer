@@ -41,6 +41,10 @@ const el = {
   leagueStatus: document.querySelector("#league-status"),
   leagueStatusText: document.querySelector("#league-status-text"),
   leagueStatusLoader: document.querySelector("#league-status-loader"),
+  snapshotLeague: document.querySelector("#snapshot-league"),
+  snapshotManager: document.querySelector("#snapshot-manager"),
+  snapshotTarget: document.querySelector("#snapshot-target"),
+  snapshotPool: document.querySelector("#snapshot-pool"),
   identitySection: document.querySelector("#identity-section"),
   meSelect: document.querySelector("#me-select"),
   playerSection: document.querySelector("#player-section"),
@@ -78,6 +82,12 @@ const el = {
 };
 
 el.loadLeagueBtn.addEventListener("click", loadLeague);
+el.leagueId?.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    loadLeague();
+  }
+});
 el.copyLeagueIdBtn?.addEventListener("click", copyHelperLeagueId);
 el.playerSearch.addEventListener("input", () => {
   invalidateResults();
@@ -122,12 +132,42 @@ el.meSelect.addEventListener("change", () => {
 });
 el.generateBtn.addEventListener("click", generateTradeIdeas);
 
+renderSessionSnapshot();
+
 let leagueLoadAnimationTimer = null;
 let leagueLoadStartedAt = 0;
 let copyFeedbackTimer = null;
 
 function invalidateResults() {
   el.resultsSection.classList.add("hidden");
+}
+
+function renderSessionSnapshot() {
+  const meRosterId = Number(el.meSelect?.value || state.meRosterId);
+  const meRoster = state.normalizedRosters.find((roster) => roster.rosterId === meRosterId) || null;
+  const allowedTypes = [
+    state.outgoingFilters.players ? "players" : null,
+    state.outgoingFilters.picks ? "picks" : null,
+  ].filter(Boolean).join(" + ");
+
+  if (el.snapshotLeague) {
+    el.snapshotLeague.textContent = state.leagueName || "Waiting for load";
+  }
+  if (el.snapshotManager) {
+    el.snapshotManager.textContent = meRoster?.manager.displayName || (state.normalizedRosters.length ? "Choose manager" : "Choose after load");
+  }
+  if (el.snapshotTarget) {
+    el.snapshotTarget.textContent = state.targetAsset?.name || "No target yet";
+  }
+  if (el.snapshotPool) {
+    if (state.selectedOutgoingAssetIds.size > 0) {
+      el.snapshotPool.textContent = `${state.selectedOutgoingAssetIds.size} asset${state.selectedOutgoingAssetIds.size === 1 ? "" : "s"} selected`;
+    } else if (state.leagueName) {
+      el.snapshotPool.textContent = `Flexible ${allowedTypes}`;
+    } else {
+      el.snapshotPool.textContent = "Players + picks";
+    }
+  }
 }
 
 async function loadLeague() {
@@ -140,6 +180,7 @@ async function loadLeague() {
   startLeagueLoadingUi();
   state.targetAsset = null;
   state.selectedOutgoingAssetIds.clear();
+  renderSessionSnapshot();
   el.resultsList.innerHTML = "";
   el.resultsSection.classList.add("hidden");
 
@@ -159,6 +200,7 @@ async function loadLeague() {
     state.normalizedRosters = normalizeRosters(rosters, users, state.players, previousContext);
 
     hydrateManagerSelector();
+    renderSessionSnapshot();
     el.identitySection.classList.remove("hidden");
     el.playerSection.classList.remove("hidden");
     el.builderSection.classList.remove("hidden");
@@ -376,6 +418,7 @@ function hydrateManagerSelector() {
   pruneSelectedOutgoingAssets();
   renderPlayerSearch();
   renderOutgoingAssetSearch();
+  renderSessionSnapshot();
 }
 
 function updateAssetTypeFilter(scope, key, checked) {
@@ -435,12 +478,14 @@ function renderPlayerSearch() {
   const meRosterId = Number(el.meSelect.value || state.meRosterId);
   state.meRosterId = meRosterId;
   const query = el.playerSearch.value.trim().toLowerCase();
+  let snapshotNeedsRefresh = false;
 
   if (
     state.targetAsset &&
     (state.targetAsset.managerRosterId === meRosterId || !assetTypeAllowed(state.targetAsset, state.targetFilters))
   ) {
     state.targetAsset = null;
+    snapshotNeedsRefresh = true;
   }
 
   const candidates = state.normalizedRosters
@@ -462,6 +507,7 @@ function renderPlayerSearch() {
 
   if (candidates.length === 0) {
     el.playerResults.innerHTML = `<div class="player-item muted">No matching assets found on other rosters.</div>`;
+    if (snapshotNeedsRefresh) renderSessionSnapshot();
     return;
   }
 
@@ -475,10 +521,13 @@ function renderPlayerSearch() {
     row.addEventListener("click", () => {
       state.targetAsset = asset;
       el.resultsSection.classList.add("hidden");
+      renderSessionSnapshot();
       renderPlayerSearch();
     });
     el.playerResults.appendChild(row);
   }
+
+  if (snapshotNeedsRefresh) renderSessionSnapshot();
 }
 
 function pruneSelectedOutgoingAssets() {
@@ -589,6 +638,7 @@ function updateSelectedAssetsSummary() {
 
   if (state.selectedOutgoingAssetIds.size > 0) {
     el.selectedAssetsSummary.textContent = `${state.selectedOutgoingAssetIds.size} exact asset${state.selectedOutgoingAssetIds.size === 1 ? "" : "s"} selected. The lab will only use these pieces${suffix}.`;
+    renderSessionSnapshot();
     return;
   }
 
@@ -597,6 +647,7 @@ function updateSelectedAssetsSummary() {
     state.outgoingFilters.picks ? "picks" : null,
   ].filter(Boolean).join(" + ");
   el.selectedAssetsSummary.textContent = `No exact assets selected yet. The lab can use any allowed ${allowedTypes}${suffix}.`;
+  renderSessionSnapshot();
 }
 
 function buildAssetPickerMarkup(asset, { values, contextLabel, emphasisTags = [] } = {}) {
@@ -612,13 +663,15 @@ function buildAssetPickerMarkup(asset, { values, contextLabel, emphasisTags = []
     if (asset.raw?.round) pills.push(`<span class="asset-pill">R${asset.raw.round}</span>`);
   }
 
-  pills.push(`<span class="asset-pill gold">Value ${formatNumber(getAssetValue(asset, values))}</span>`);
   emphasisTags.slice(0, 2).forEach((tag) => pills.push(`<span class="asset-pill rose">${tag}</span>`));
 
   return `
     <div class="asset-row-top">
-      <strong>${asset.name}</strong>
-      <span class="muted small">${contextLabel || ""}</span>
+      <div class="asset-name-stack">
+        <strong>${asset.name}</strong>
+        ${contextLabel ? `<span class="asset-context">${contextLabel}</span>` : ""}
+      </div>
+      <span class="asset-value-badge">Value ${formatNumber(getAssetValue(asset, values))}</span>
     </div>
     <div class="asset-meta">
       ${pills.join("")}
@@ -660,41 +713,44 @@ async function generateTradeIdeas() {
   const tradeLab = getTradeLabSettings();
 
   try {
+    setButtonLoading(el.generateBtn, true, "Building trade ideas...");
     state.values = await loadValues(el.ktcUrlInput.value.trim());
+    renderPlayerSearch();
+    renderOutgoingAssetSearch();
+
+    const ideas = suggestTrades({
+      myRoster: meRoster,
+      theirRoster,
+      targetAsset: state.targetAsset,
+      values: state.values,
+      fairnessPct,
+      maxResults,
+      allowExtraTargetAssets,
+      tradeLab,
+    });
+
+    el.resultsSection.classList.remove("hidden");
+    el.resultsSubtitle.textContent = buildResultsSubtitle({
+      meRoster,
+      theirRoster,
+      targetAsset: state.targetAsset,
+      fairnessPct,
+      tradeLab,
+    });
+
+    if (ideas.length === 0) {
+      el.resultsList.innerHTML = `<p class="muted">${buildNoIdeasMessage(tradeLab)}</p>`;
+      el.resultsSection.scrollIntoView({ behavior: "smooth", block: "start" });
+      return;
+    }
+
+    el.resultsList.innerHTML = ideas.map((idea, idx) => renderTradeCard(idea, idx, state.values)).join("");
+    el.resultsSection.scrollIntoView({ behavior: "smooth", block: "start" });
   } catch (err) {
     alert(`Could not load valuation source. ${err.message}`);
-    return;
+  } finally {
+    setButtonLoading(el.generateBtn, false);
   }
-
-  renderPlayerSearch();
-  renderOutgoingAssetSearch();
-
-  const ideas = suggestTrades({
-    myRoster: meRoster,
-    theirRoster,
-    targetAsset: state.targetAsset,
-    values: state.values,
-    fairnessPct,
-    maxResults,
-    allowExtraTargetAssets,
-    tradeLab,
-  });
-
-  el.resultsSection.classList.remove("hidden");
-  el.resultsSubtitle.textContent = buildResultsSubtitle({
-    meRoster,
-    theirRoster,
-    targetAsset: state.targetAsset,
-    fairnessPct,
-    tradeLab,
-  });
-
-  if (ideas.length === 0) {
-    el.resultsList.innerHTML = `<p class="muted">${buildNoIdeasMessage(tradeLab)}</p>`;
-    return;
-  }
-
-  el.resultsList.innerHTML = ideas.map((idea, idx) => renderTradeCard(idea, idx, state.values)).join("");
 }
 
 function getTradeLabSettings() {
@@ -752,10 +808,16 @@ function renderTradeCard(idea, index, values) {
       <div class="trade-tag-row">
         ${idea.tags.map((tag) => `<span class="trade-tag">${tag}</span>`).join("")}
       </div>
-      <p><strong>You send:</strong></p>
-      ${renderAssetList(idea.myAssets, values)}
-      <p><strong>You receive:</strong></p>
-      ${renderAssetList(idea.theirAssets, values)}
+      <div class="trade-body-grid">
+        <section class="trade-side">
+          <h4>You send</h4>
+          ${renderAssetList(idea.myAssets, values)}
+        </section>
+        <section class="trade-side">
+          <h4>You receive</h4>
+          ${renderAssetList(idea.theirAssets, values)}
+        </section>
+      </div>
       <div class="trade-metrics">
         <div class="trade-metric">
           <strong>KTC balance</strong>
@@ -1256,6 +1318,14 @@ function renderAssetList(assets, values) {
         )
         .join("")}
     </ul>`;
+}
+
+function setButtonLoading(button, isLoading, loadingText = "Loading...") {
+  if (!button) return;
+  if (!button.dataset.defaultLabel) button.dataset.defaultLabel = button.textContent;
+  button.disabled = isLoading;
+  button.classList.toggle("loading", isLoading);
+  button.textContent = isLoading ? loadingText : button.dataset.defaultLabel;
 }
 
 function formatNumber(value) {
