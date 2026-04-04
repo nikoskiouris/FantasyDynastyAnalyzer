@@ -30,6 +30,23 @@ body {
 .hidden { display: none; }
 .muted { color: var(--muted); }
 .small { font-size: 0.9rem; }
+.linklike {
+  display: inline;
+  width: auto;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  text-decoration: underline;
+  font: inherit;
+  font-weight: 600;
+}
+.linklike:hover { filter: brightness(1.15); }
+.linklike:focus-visible {
+  outline: 2px solid #22d3ee;
+  outline-offset: 2px;
+  border-radius: 4px;
+}
 label { display: block; margin: 0.5rem 0; }
 input, select, button {
   width: 100%;
