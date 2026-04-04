@@ -43,7 +43,7 @@
                 <strong id="snapshot-target">No target yet</strong>
               </article>
               <article class="snapshot-card">
-                <span class="snapshot-label">Give Up</span>
+                <span class="snapshot-label">Your Side</span>
                 <strong id="snapshot-pool">Optional shortlist</strong>
               </article>
             </div>
@@ -53,9 +53,9 @@
         <section class="workflow-banner">
           <div>
             <p class="eyebrow">Workflow</p>
-            <h2>Who you are, what you want, what you would move</h2>
+            <h2>Who you are, what you want, what you would move or protect</h2>
           </div>
-          <p class="muted">Load the league, choose your team, pick a target, optionally shortlist your give-up pieces, add league context, and generate ideas.</p>
+          <p class="muted">Load the league, choose your team, pick a target, optionally shortlist pieces to include on your side, protect the ones you will not move, add league context, and generate ideas.</p>
         </section>
 
         <section class="card stage-card stage-lead">
@@ -113,19 +113,28 @@
         <section class="card stage-card hidden trade-lab" id="builder-section">
           <div class="section-heading">
             <div class="section-kicker">
-              <span class="step-badge">04</span>
-              <span class="eyebrow">Optional Give-Up</span>
+              <span class="step-badge">Your Side</span>
+              <span class="eyebrow">Builder</span>
             </div>
-            <h2>Anything you want to give up?</h2>
-            <p class="section-copy">Shortlist any players or picks you are open to moving. Leave this blank and the builder will avoid your top core pieces.</p>
+            <h2>What can go on your side?</h2>
+            <p class="section-copy">Select exact players or picks you want included in offers, and protect anything you do not want to give up.</p>
           </div>
-          <label for="my-asset-search">Optional: choose players or picks you are open to moving</label>
-          <input id="my-asset-search" placeholder="Search your roster..." />
+          <label for="my-asset-search">Choose players or picks you do want to include</label>
+          <input id="my-asset-search" placeholder="Search your roster for include candidates..." />
           <div class="builder-toolbar">
-            <button id="clear-selected-assets-btn" type="button" class="secondary-btn">Clear list</button>
+            <button id="clear-selected-assets-btn" type="button" class="secondary-btn">Clear included</button>
+            <button id="clear-excluded-assets-btn" type="button" class="secondary-btn">Clear protected</button>
           </div>
-          <p id="selected-assets-summary" class="selection-summary muted small">Optional. Leave this blank and the builder can use players or picks while protecting your top core pieces.</p>
+          <p id="selected-assets-summary" class="selection-summary muted small">Optional. Leave this blank and the builder can use players or picks while avoiding your highest-value core pieces.</p>
           <div id="my-asset-results" class="list"></div>
+          <label for="exclude-asset-select">Protect players or picks you do not want to give up</label>
+          <select id="exclude-asset-select">
+            <option value="">Choose your team first.</option>
+          </select>
+          <p id="excluded-assets-summary" class="selection-summary muted small">Optional. Protected assets stay out of generated trade ideas.</p>
+          <div id="excluded-assets-list" class="selection-chip-list">
+            <p class="muted small">No protected assets yet.</p>
+          </div>
         </section>
 
         <section class="card stage-card hidden" id="market-section">

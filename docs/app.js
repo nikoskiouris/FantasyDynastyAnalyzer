@@ -32,6 +32,7 @@ const state = {
     picks: true,
   },
   selectedOutgoingAssetIds: new Set(),
+  excludedOutgoingAssetIds: new Set(),
 };
 
 const el = {
@@ -60,7 +61,11 @@ const el = {
   myAssetResults: document.querySelector("#my-asset-results"),
   selectVisibleAssetsBtn: document.querySelector("#select-visible-assets-btn"),
   clearSelectedAssetsBtn: document.querySelector("#clear-selected-assets-btn"),
+  clearExcludedAssetsBtn: document.querySelector("#clear-excluded-assets-btn"),
   selectedAssetsSummary: document.querySelector("#selected-assets-summary"),
+  excludeAssetSelect: document.querySelector("#exclude-asset-select"),
+  excludedAssetsSummary: document.querySelector("#excluded-assets-summary"),
+  excludedAssetsList: document.querySelector("#excluded-assets-list"),
   marketSection: document.querySelector("#market-section"),
   positionPremiumSelect: document.querySelector("#position-premium-select"),
   tradeVibeSelect: document.querySelector("#trade-vibe-select"),
@@ -105,6 +110,8 @@ el.myAssetSearch?.addEventListener("input", () => {
 });
 el.selectVisibleAssetsBtn?.addEventListener("click", selectVisibleOutgoingAssets);
 el.clearSelectedAssetsBtn?.addEventListener("click", clearSelectedOutgoingAssets);
+el.clearExcludedAssetsBtn?.addEventListener("click", clearExcludedOutgoingAssets);
+el.excludeAssetSelect?.addEventListener("change", handleExcludedAssetSelectChange);
 [
   el.positionPremiumSelect,
   el.tradeVibeSelect,
@@ -121,6 +128,7 @@ el.meSelect.addEventListener("change", () => {
   state.meRosterId = Number(el.meSelect.value);
   renderPlayerSearch();
   pruneSelectedOutgoingAssets();
+  pruneExcludedOutgoingAssets();
   renderOutgoingAssetSearch();
 });
 el.generateBtn.addEventListener("click", generateTradeIdeas);
@@ -149,8 +157,15 @@ function renderSessionSnapshot() {
     el.snapshotTarget.textContent = state.targetAsset?.name || "No target yet";
   }
   if (el.snapshotPool) {
-    if (state.selectedOutgoingAssetIds.size > 0) {
-      el.snapshotPool.textContent = `${state.selectedOutgoingAssetIds.size} piece${state.selectedOutgoingAssetIds.size === 1 ? "" : "s"} selected`;
+    if (state.selectedOutgoingAssetIds.size > 0 || state.excludedOutgoingAssetIds.size > 0) {
+      const notes = [];
+      if (state.selectedOutgoingAssetIds.size > 0) {
+        notes.push(`${state.selectedOutgoingAssetIds.size} included`);
+      }
+      if (state.excludedOutgoingAssetIds.size > 0) {
+        notes.push(`${state.excludedOutgoingAssetIds.size} protected`);
+      }
+      el.snapshotPool.textContent = notes.join(" / ");
     } else if (state.leagueName) {
       el.snapshotPool.textContent = "Builder picks the package";
     } else {
@@ -169,6 +184,7 @@ async function loadLeague() {
   startLeagueLoadingUi();
   state.targetAsset = null;
   state.selectedOutgoingAssetIds.clear();
+  state.excludedOutgoingAssetIds.clear();
   renderSessionSnapshot();
   el.resultsList.innerHTML = "";
   el.resultsSection.classList.add("hidden");
@@ -523,15 +539,28 @@ function pruneSelectedOutgoingAssets() {
   const meRoster = getMyRoster();
   if (!meRoster) {
     state.selectedOutgoingAssetIds.clear();
-    updateSelectedAssetsSummary();
     return;
   }
 
   const validAssetIds = new Set(meRoster.assets.map((asset) => asset.assetId));
   state.selectedOutgoingAssetIds = new Set(
-    [...state.selectedOutgoingAssetIds].filter((assetId) => validAssetIds.has(assetId))
+    [...state.selectedOutgoingAssetIds].filter(
+      (assetId) => validAssetIds.has(assetId) && !state.excludedOutgoingAssetIds.has(assetId)
+    )
   );
-  updateSelectedAssetsSummary();
+}
+
+function pruneExcludedOutgoingAssets() {
+  const meRoster = getMyRoster();
+  if (!meRoster) {
+    state.excludedOutgoingAssetIds.clear();
+    return;
+  }
+
+  const validAssetIds = new Set(meRoster.assets.map((asset) => asset.assetId));
+  state.excludedOutgoingAssetIds = new Set(
+    [...state.excludedOutgoingAssetIds].filter((assetId) => validAssetIds.has(assetId))
+  );
 }
 
 function pruneSelectedOutgoingAssetsByFilters() {
@@ -548,6 +577,31 @@ function pruneSelectedOutgoingAssetsByFilters() {
   );
 }
 
+function handleExcludedAssetSelectChange() {
+  const assetId = el.excludeAssetSelect?.value || "";
+  if (!assetId) return;
+  addExcludedOutgoingAsset(assetId);
+}
+
+function addExcludedOutgoingAsset(assetId) {
+  invalidateResults();
+  state.selectedOutgoingAssetIds.delete(assetId);
+  state.excludedOutgoingAssetIds.add(assetId);
+  renderOutgoingAssetSearch();
+}
+
+function removeExcludedOutgoingAsset(assetId) {
+  invalidateResults();
+  state.excludedOutgoingAssetIds.delete(assetId);
+  renderOutgoingAssetSearch();
+}
+
+function clearExcludedOutgoingAssets() {
+  invalidateResults();
+  state.excludedOutgoingAssetIds.clear();
+  renderOutgoingAssetSearch();
+}
+
 function getVisibleOutgoingAssets() {
   const meRoster = getMyRoster();
   if (!meRoster) return [];
@@ -555,6 +609,7 @@ function getVisibleOutgoingAssets() {
   const query = el.myAssetSearch?.value.trim().toLowerCase() || "";
   return meRoster.assets
     .filter((asset) => assetTypeAllowed(asset, state.outgoingFilters))
+    .filter((asset) => !state.excludedOutgoingAssetIds.has(asset.assetId))
     .filter((asset) => assetMatchesQuery(asset, query))
     .sort(sortAssetsForList)
     .slice(0, 150);
@@ -586,6 +641,7 @@ function toggleOutgoingAsset(assetId) {
 function renderOutgoingAssetSearch() {
   if (!el.myAssetResults) return;
   const meRoster = getMyRoster();
+  renderExcludedAssetControls(meRoster);
   if (!meRoster) {
     el.myAssetResults.innerHTML = `<div class="player-item muted">Choose your team first.</div>`;
     updateSelectedAssetsSummary();
@@ -596,7 +652,10 @@ function renderOutgoingAssetSearch() {
   el.myAssetResults.innerHTML = "";
 
   if (visibleAssets.length === 0) {
-    el.myAssetResults.innerHTML = `<div class="player-item muted">No matching assets found on your roster.</div>`;
+    const emptyState = state.excludedOutgoingAssetIds.size > 0
+      ? "No matching assets found outside your protected list."
+      : "No matching assets found on your roster.";
+    el.myAssetResults.innerHTML = `<div class="player-item muted">${emptyState}</div>`;
     updateSelectedAssetsSummary();
     return;
   }
@@ -607,7 +666,7 @@ function renderOutgoingAssetSearch() {
     row.className = `player-item ${selected ? "selected" : ""}`;
     row.innerHTML = buildAssetPickerMarkup(asset, {
       values: state.values,
-      contextLabel: selected ? "Selected to give up" : "Tap to include as a give-up piece",
+      contextLabel: selected ? "Selected for your side" : "Tap to include on your side",
       emphasisTags: getProtectionTags(asset, meRoster, state.values),
     });
     row.addEventListener("click", () => toggleOutgoingAsset(asset.assetId));
@@ -617,17 +676,122 @@ function renderOutgoingAssetSearch() {
   updateSelectedAssetsSummary();
 }
 
+function renderExcludedAssetControls(meRoster = getMyRoster()) {
+  hydrateExcludedAssetSelect(meRoster);
+  renderExcludedOutgoingAssets(meRoster);
+  updateExcludedAssetsSummary();
+}
+
+function hydrateExcludedAssetSelect(meRoster = getMyRoster()) {
+  if (!el.excludeAssetSelect) return;
+
+  el.excludeAssetSelect.innerHTML = "";
+
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+
+  if (!meRoster) {
+    placeholder.textContent = "Choose your team first.";
+    el.excludeAssetSelect.appendChild(placeholder);
+    el.excludeAssetSelect.disabled = true;
+    return;
+  }
+
+  const availableAssets = meRoster.assets
+    .filter((asset) => !state.excludedOutgoingAssetIds.has(asset.assetId))
+    .sort(sortAssetsForList);
+
+  placeholder.textContent = availableAssets.length > 0
+    ? "Select a player or pick to protect"
+    : "No more assets available to protect";
+  el.excludeAssetSelect.appendChild(placeholder);
+
+  for (const asset of availableAssets) {
+    const option = document.createElement("option");
+    option.value = asset.assetId;
+    option.textContent = buildAssetSelectLabel(asset);
+    el.excludeAssetSelect.appendChild(option);
+  }
+
+  el.excludeAssetSelect.value = "";
+  el.excludeAssetSelect.disabled = availableAssets.length === 0;
+}
+
+function renderExcludedOutgoingAssets(meRoster = getMyRoster()) {
+  if (!el.excludedAssetsList) return;
+
+  el.excludedAssetsList.innerHTML = "";
+
+  if (!meRoster) {
+    el.excludedAssetsList.innerHTML = `<p class="muted small">Choose your team first.</p>`;
+    return;
+  }
+
+  const protectedAssets = meRoster.assets
+    .filter((asset) => state.excludedOutgoingAssetIds.has(asset.assetId))
+    .sort(sortAssetsForList);
+
+  if (protectedAssets.length === 0) {
+    el.excludedAssetsList.innerHTML = `<p class="muted small">No protected assets yet.</p>`;
+    return;
+  }
+
+  const chipRow = document.createElement("div");
+  chipRow.className = "selection-chip-row";
+
+  for (const asset of protectedAssets) {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "selection-chip";
+    chip.innerHTML = `
+      <span class="selection-chip-label">${asset.name}</span>
+      <span class="selection-chip-action">Remove</span>
+    `;
+    chip.addEventListener("click", () => removeExcludedOutgoingAsset(asset.assetId));
+    chipRow.appendChild(chip);
+  }
+
+  el.excludedAssetsList.appendChild(chipRow);
+}
+
 function updateSelectedAssetsSummary() {
   if (!el.selectedAssetsSummary) return;
 
   if (state.selectedOutgoingAssetIds.size > 0) {
-    el.selectedAssetsSummary.textContent = `${state.selectedOutgoingAssetIds.size} exact piece${state.selectedOutgoingAssetIds.size === 1 ? "" : "s"} selected. Trade ideas will only use these assets.`;
+    el.selectedAssetsSummary.textContent = `${state.selectedOutgoingAssetIds.size} exact piece${state.selectedOutgoingAssetIds.size === 1 ? "" : "s"} selected. Trade ideas will only use these included assets.`;
     renderSessionSnapshot();
     return;
   }
 
   el.selectedAssetsSummary.textContent = "Optional. Leave this blank and the builder can use players or picks while avoiding your highest-value core pieces.";
   renderSessionSnapshot();
+}
+
+function updateExcludedAssetsSummary() {
+  if (!el.excludedAssetsSummary) return;
+
+  if (state.excludedOutgoingAssetIds.size > 0) {
+    el.excludedAssetsSummary.textContent = `${state.excludedOutgoingAssetIds.size} protected piece${state.excludedOutgoingAssetIds.size === 1 ? "" : "s"} will stay off your side of every trade idea.`;
+    renderSessionSnapshot();
+    return;
+  }
+
+  el.excludedAssetsSummary.textContent = "Optional. Protected assets stay out of generated trade ideas.";
+  renderSessionSnapshot();
+}
+
+function buildAssetSelectLabel(asset) {
+  const details = [];
+  if (asset.assetType === "player") {
+    const position = playerPositionForAsset(asset);
+    if (position) details.push(position);
+    if (asset.raw?.team) details.push(asset.raw.team);
+  }
+  if (asset.assetType === "pick") {
+    if (asset.raw?.season) details.push(String(asset.raw.season));
+    if (asset.raw?.round) details.push(`R${asset.raw.round}`);
+  }
+  return details.length > 0 ? `${asset.name} - ${details.join(" - ")}` : asset.name;
 }
 
 function buildAssetPickerMarkup(asset, { values, contextLabel, emphasisTags = [] } = {}) {
@@ -764,6 +928,7 @@ function getTradeLabSettings() {
     allowPlayers: true,
     allowPicks: true,
     selectedOutgoingAssetIds: new Set(state.selectedOutgoingAssetIds),
+    excludedOutgoingAssetIds: new Set(state.excludedOutgoingAssetIds),
     positionPremium: el.positionPremiumSelect?.value || "none",
     tradeVibe: el.tradeVibeSelect?.value || "balanced",
     teamState: el.teamStateSelect?.value || "middle",
@@ -776,14 +941,18 @@ function buildResultsSubtitle({ meRoster, theirRoster, targetAsset, tradeLab }) 
   notes.push(`${tradeLab.tradeVibe} room`);
   if (tradeLab.positionPremium !== "none") notes.push(`${tradeLab.positionPremium} premium`);
   if (tradeLab.selectedOutgoingAssetIds.size > 0) {
-    notes.push(`${tradeLab.selectedOutgoingAssetIds.size} hand-picked give-up piece${tradeLab.selectedOutgoingAssetIds.size === 1 ? "" : "s"}`);
+    notes.push(`${tradeLab.selectedOutgoingAssetIds.size} hand-picked asset${tradeLab.selectedOutgoingAssetIds.size === 1 ? "" : "s"}`);
+  }
+  if (tradeLab.excludedOutgoingAssetIds.size > 0) {
+    notes.push(`${tradeLab.excludedOutgoingAssetIds.size} protected asset${tradeLab.excludedOutgoingAssetIds.size === 1 ? "" : "s"}`);
   }
   return `${meRoster.manager.displayName} targeting ${targetAsset.name} from ${theirRoster.manager.displayName} • ${notes.join(" • ")}`;
 }
 
 function buildNoIdeasMessage(tradeLab) {
   const advice = [];
-  if (tradeLab.selectedOutgoingAssetIds.size > 0) advice.push("leave the give-up list blank or include more pieces");
+  if (tradeLab.selectedOutgoingAssetIds.size > 0) advice.push("leave the include list blank or include more pieces");
+  if (tradeLab.excludedOutgoingAssetIds.size > 0) advice.push("protect fewer assets");
   advice.push("change the target");
   advice.push("try a different team-state lens");
   return `No trade ideas cleared the value and fit checks. Try to ${advice.join(", ")}.`;
@@ -927,7 +1096,11 @@ function suggestTrades({
 
 function resolveOutgoingAssetPool({ myRoster, values, tradeLab }) {
   let pool = myRoster.assets.filter((asset) =>
-    (asset.assetType === "player" && tradeLab.allowPlayers) || (asset.assetType === "pick" && tradeLab.allowPicks)
+    !tradeLab.excludedOutgoingAssetIds.has(asset.assetId)
+    && (
+      (asset.assetType === "player" && tradeLab.allowPlayers)
+      || (asset.assetType === "pick" && tradeLab.allowPicks)
+    )
   );
 
   if (tradeLab.selectedOutgoingAssetIds.size > 0) {
