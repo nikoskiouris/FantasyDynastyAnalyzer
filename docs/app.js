@@ -503,7 +503,9 @@ function assetMatchesQuery(asset, query) {
   return haystack.includes(query);
 }
 
-function sortAssetsForList(a, b) {
+function sortAssetsByValueDesc(a, b, values = state.values) {
+  const valueDiff = getAssetValue(b, values) - getAssetValue(a, values);
+  if (valueDiff !== 0) return valueDiff;
   if (a.assetType !== b.assetType) return a.assetType === "player" ? -1 : 1;
   return a.name.localeCompare(b.name);
 }
@@ -544,7 +546,7 @@ function renderPlayerSearch() {
         }))
     )
     .filter((asset) => assetMatchesQuery(asset, query))
-    .sort(sortAssetsForList)
+    .sort((a, b) => sortAssetsByValueDesc(a, b, state.values))
     .slice(0, 150);
 
   el.playerResults.innerHTML = "";
@@ -661,7 +663,7 @@ function getVisibleOutgoingAssets() {
     .filter((asset) => assetTypeAllowed(asset, state.outgoingFilters))
     .filter((asset) => !state.excludedOutgoingAssetIds.has(asset.assetId))
     .filter((asset) => assetMatchesQuery(asset, query))
-    .sort(sortAssetsForList)
+    .sort((a, b) => sortAssetsByValueDesc(a, b, state.values))
     .slice(0, 150);
 }
 
@@ -673,7 +675,7 @@ function getVisibleExcludedOutgoingAssets() {
   return meRoster.assets
     .filter((asset) => assetTypeAllowed(asset, state.outgoingFilters))
     .filter((asset) => assetMatchesQuery(asset, query))
-    .sort(sortAssetsForList)
+    .sort((a, b) => sortAssetsByValueDesc(a, b, state.values))
     .slice(0, 150);
 }
 
@@ -793,7 +795,7 @@ function renderSelectedOutgoingAssets(meRoster = getMyRoster()) {
 
   const includedAssets = meRoster.assets
     .filter((asset) => state.selectedOutgoingAssetIds.has(asset.assetId))
-    .sort(sortAssetsForList);
+    .sort((a, b) => sortAssetsByValueDesc(a, b, state.values));
 
   if (includedAssets.length === 0) {
     el.selectedAssetsList.innerHTML = `<p class="muted small">No included assets selected yet.</p>`;
@@ -830,7 +832,7 @@ function renderExcludedOutgoingAssets(meRoster = getMyRoster()) {
 
   const protectedAssets = meRoster.assets
     .filter((asset) => state.excludedOutgoingAssetIds.has(asset.assetId))
-    .sort(sortAssetsForList);
+    .sort((a, b) => sortAssetsByValueDesc(a, b, state.values));
 
   if (protectedAssets.length === 0) {
     el.excludedAssetsList.innerHTML = `<p class="muted small">No excluded assets selected yet.</p>`;
@@ -2353,9 +2355,10 @@ function combinationsOfSize(items, size) {
 }
 
 function renderAssetList(assets, values, teamClass = "") {
+  const sortedAssets = [...assets].sort((a, b) => sortAssetsByValueDesc(a, b, values));
   return `
     <ul class="asset-list ${teamClass}">
-      ${assets
+      ${sortedAssets
         .map(
           (asset) => `
             <li class="asset-item">
@@ -2437,6 +2440,7 @@ function getCoreAssetIdSet(myRoster, values) {
 
 function estimatedValue(asset) {
   if (asset.assetType === "pick") return 2200;
+  if (isInactivePlayerAsset(asset)) return 0;
 
   const position = playerPositionForAsset(asset);
   const age = Number(asset.raw?.age || 26);
@@ -2451,6 +2455,24 @@ function estimatedValue(asset) {
   const base = baseByPos[position] || 1800;
   const ageModifier = Math.max(-1400, (26 - age) * 130);
   return Math.max(300, Math.round(base + ageModifier));
+}
+
+function isInactivePlayerAsset(asset) {
+  if (asset.assetType !== "player") return false;
+  if (asset.raw?.active === false) return true;
+
+  const status = String(asset.raw?.status || "").trim().toLowerCase();
+  if (["inactive", "retired", "reserve_retired", "reserve/did_not_report", "did_not_report"].includes(status)) {
+    return true;
+  }
+
+  const team = String(asset.raw?.team || "").trim().toUpperCase();
+  if (!team || team === "FA") {
+    const age = playerAgeForAsset(asset);
+    if (Number.isFinite(age) && age >= 30) return true;
+  }
+
+  return false;
 }
 
 function normalizeRosters(rosters, users, players, previousContext = { league: null, users: [], rosters: [] }) {
