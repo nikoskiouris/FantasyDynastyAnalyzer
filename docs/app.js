@@ -60,7 +60,7 @@ async function loadLeague() {
 
   startLeagueLoadingUi();
   state.targetAsset = null;
-  state.resultsList.innerHTML = "";
+  el.resultsList.innerHTML = "";
 
   try {
     const [league, users, rosters] = await loadLeagueCoreData(leagueId);
