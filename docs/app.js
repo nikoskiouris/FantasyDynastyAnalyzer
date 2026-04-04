@@ -212,7 +212,6 @@ async function apiGetWithRetry(path, { timeoutMs = 25000, retries = 0 } = {}) {
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
-
 function getPlayersCache() {
   try {
     const raw = localStorage.getItem(PLAYERS_CACHE_KEY);
@@ -241,6 +240,7 @@ function savePlayersCache(players, savedAt, stateKey = null) {
 }
 
 function hydrateManagerSelector() {
+  const selectedRosterId = Number(el.meSelect.value || state.meRosterId);
   el.meSelect.innerHTML = "";
   state.normalizedRosters
     .slice()
@@ -252,8 +252,13 @@ function hydrateManagerSelector() {
       el.meSelect.appendChild(option);
     });
 
-  if (state.normalizedRosters.length > 0) {
+  const preservedRoster = state.normalizedRosters.find((roster) => roster.rosterId === selectedRosterId);
+  if (preservedRoster) {
+    state.meRosterId = preservedRoster.rosterId;
+    el.meSelect.value = String(preservedRoster.rosterId);
+  } else if (state.normalizedRosters.length > 0) {
     state.meRosterId = state.normalizedRosters[0].rosterId;
+    el.meSelect.value = String(state.normalizedRosters[0].rosterId);
   }
   renderPlayerSearch();
 }
