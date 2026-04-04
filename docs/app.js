@@ -11,9 +11,13 @@ const KTC_GLOBAL_MAX_FALLBACK = 9999;
 const state = {
   leagueId: "",
   leagueName: "",
+  league: null,
   users: [],
   rosters: [],
   players: {},
+  previousLeague: null,
+  previousUsers: [],
+  previousRosters: [],
   normalizedRosters: [],
   meRosterId: null,
   targetAsset: null,
@@ -37,6 +41,7 @@ const el = {
   fairnessInput: document.querySelector("#fairness-input"),
   maxResultsInput: document.querySelector("#max-results-input"),
   ktcUrlInput: document.querySelector("#ktc-url-input"),
+  allowExtraTargetAssetsInput: document.querySelector("#allow-extra-target-assets"),
   generateBtn: document.querySelector("#generate-btn"),
   resultsSection: document.querySelector("#results-section"),
   resultsSubtitle: document.querySelector("#results-subtitle"),
@@ -68,14 +73,19 @@ async function loadLeague() {
   el.resultsList.innerHTML = "";
 
   try {
-    const [league, users, rosters] = await loadLeagueCoreData(leagueId);
+    const { league, users, rosters } = await loadLeagueCoreData(leagueId);
+    const previousContext = await loadPreviousLeagueContext(league);
 
     state.leagueId = leagueId;
     state.leagueName = league?.name || `League ${leagueId}`;
+    state.league = league;
     state.users = users;
     state.rosters = rosters;
     state.players = {};
-    state.normalizedRosters = normalizeRosters(rosters, users, state.players);
+    state.previousLeague = previousContext.league;
+    state.previousUsers = previousContext.users;
+    state.previousRosters = previousContext.rosters;
+    state.normalizedRosters = normalizeRosters(rosters, users, state.players, previousContext);
 
     hydrateManagerSelector();
     el.identitySection.classList.remove("hidden");
@@ -86,7 +96,11 @@ async function loadLeague() {
     loadPlayersWithCache()
       .then((players) => {
         state.players = players;
-        state.normalizedRosters = normalizeRosters(state.rosters, state.users, players);
+        state.normalizedRosters = normalizeRosters(state.rosters, state.users, players, {
+          league: state.previousLeague,
+          users: state.previousUsers,
+          rosters: state.previousRosters,
+        });
         hydrateManagerSelector();
         setStatus(`Loaded ${state.leagueName}. Choose your team to continue.`, { ok: true });
       })
@@ -176,7 +190,26 @@ async function loadLeagueCoreData(leagueId) {
     throw new Error(`Failed to load: ${failures.join("; ")}`);
   }
 
-  return [byKey.league, byKey.users, byKey.rosters];
+  return {
+    league: byKey.league,
+    users: byKey.users,
+    rosters: byKey.rosters,
+  };
+}
+
+async function loadPreviousLeagueContext(league) {
+  const previousLeagueId = league?.previous_league_id;
+  if (!previousLeagueId) {
+    return { league: null, users: [], rosters: [] };
+  }
+
+  try {
+    setStatus("Loading previous league context for pick labels...", { loading: true });
+    return await loadLeagueCoreData(previousLeagueId);
+  } catch (err) {
+    console.warn("Could not load previous league context", err);
+    return { league: null, users: [], rosters: [] };
+  }
 }
 
 async function loadPlayersWithCache() {
@@ -319,6 +352,7 @@ async function generateTradeIdeas() {
 
   const fairnessPct = Number(el.fairnessInput.value || 20);
   const maxResults = Number(el.maxResultsInput.value || 4);
+  const allowExtraTargetAssets = Boolean(el.allowExtraTargetAssetsInput?.checked);
 
   try {
     state.values = await loadValues(el.ktcUrlInput.value.trim());
@@ -334,6 +368,7 @@ async function generateTradeIdeas() {
     values: state.values,
     fairnessPct,
     maxResults,
+    allowExtraTargetAssets,
   });
 
   el.resultsSection.classList.remove("hidden");
@@ -349,62 +384,57 @@ async function generateTradeIdeas() {
       (idea, idx) => `
       <article class="trade-card">
         <h3>Idea ${idx + 1}</h3>
-        <p><strong>You send:</strong> ${idea.myAssets.map((a) => a.name).join(", ")}</p>
-        <p><strong>You receive:</strong> ${idea.theirAssets.map((a) => a.name).join(", ")}</p>
-        <p class="muted">Base value: you ${idea.myBaseValue} vs them ${idea.theirBaseValue}</p>
+        <p><strong>You send:</strong></p>
+        ${renderAssetList(idea.myAssets, state.values)}
+        <p><strong>You receive:</strong></p>
+        ${renderAssetList(idea.theirAssets, state.values)}
+        <p class="muted">Base value: you ${formatNumber(idea.myBaseValue)} vs them ${formatNumber(idea.theirBaseValue)}</p>
         <p class="muted">Package adjustment: ${formatPackageAdjustment(idea)}</p>
-        <p class="muted">KTC-style total: you ${idea.myAdjustedValue} vs them ${idea.theirAdjustedValue} (diff ${idea.pctDiff}%)</p>
-        <p class="muted">Add value to even: ${idea.evenValue}</p>
+        <p class="muted">KTC-style total: you ${formatNumber(idea.myAdjustedValue)} vs them ${formatNumber(idea.theirAdjustedValue)} (diff ${idea.pctDiff}%)</p>
+        <p class="muted">Add value to even: ${formatNumber(idea.evenValue)}</p>
       </article>`
     )
     .join("");
 }
 
-function suggestTrades({ myRoster, theirRoster, targetAsset, values, fairnessPct, maxResults }) {
+function suggestTrades({ myRoster, theirRoster, targetAsset, values, fairnessPct, maxResults, allowExtraTargetAssets }) {
   const targetValue = getAssetValue(targetAsset, values);
   if (!targetValue) return [];
 
   const globalMaxValue = getGlobalMaxPlayerValue(values, targetValue);
-  const valuedAssets = myRoster.assets.filter((asset) => Number.isFinite(getAssetValue(asset, values)));
-  const combos = [];
-
-  valuedAssets.forEach((asset) => combos.push([asset]));
-  for (let i = 0; i < valuedAssets.length; i++) {
-    for (let j = i + 1; j < valuedAssets.length; j++) {
-      combos.push([valuedAssets[i], valuedAssets[j]]);
-    }
-  }
-  for (let i = 0; i < valuedAssets.length; i++) {
-    for (let j = i + 1; j < valuedAssets.length; j++) {
-      for (let k = j + 1; k < valuedAssets.length; k++) {
-        combos.push([valuedAssets[i], valuedAssets[j], valuedAssets[k]]);
-      }
-    }
-  }
+  const myPackages = buildPackages(myRoster.assets, values, 3);
+  const theirPackages = buildTargetPackages({
+    theirRoster,
+    targetAsset,
+    values,
+    allowExtraTargetAssets,
+    maxExtraAssets: 2,
+  });
 
   const rawIdeas = [];
-  for (const myAssets of combos) {
-    const myValues = myAssets.map((asset) => getAssetValue(asset, values));
-    const packageResult = calculatePackageAdjustment({
-      myValues,
-      theirValues: [targetValue],
-      globalMaxValue,
-    });
-    const pctDiff = calculatePctDiff(packageResult.myAdjustedValue, packageResult.theirAdjustedValue);
-    if (pctDiff <= fairnessPct) {
-      rawIdeas.push({
-        myAssets,
-        theirAssets: [targetAsset],
-        ...packageResult,
-        pctDiff: Number(pctDiff.toFixed(2)),
+  for (const myPackage of myPackages) {
+    for (const theirPackage of theirPackages) {
+      const packageResult = calculatePackageAdjustment({
+        myValues: myPackage.values,
+        theirValues: theirPackage.values,
+        globalMaxValue,
       });
+      const pctDiff = calculatePctDiff(packageResult.myAdjustedValue, packageResult.theirAdjustedValue);
+      if (pctDiff <= fairnessPct) {
+        rawIdeas.push({
+          myAssets: myPackage.assets,
+          theirAssets: theirPackage.assets,
+          ...packageResult,
+          pctDiff: Number(pctDiff.toFixed(2)),
+        });
+      }
     }
   }
 
   const deduped = [];
   const seen = new Set();
   for (const idea of rawIdeas) {
-    const key = idea.myAssets.map((asset) => asset.assetId).sort().join("|");
+    const key = `${idea.myAssets.map((a) => a.assetId).sort().join("|")}=>${idea.theirAssets.map((a) => a.assetId).sort().join("|")}`;
     if (seen.has(key)) continue;
     seen.add(key);
     deduped.push(idea);
@@ -416,7 +446,10 @@ function suggestTrades({ myRoster, theirRoster, targetAsset, values, fairnessPct
 
     const byEvenValue = a.evenValue - b.evenValue;
     if (byEvenValue !== 0) return byEvenValue;
-
+    const byTotalAssets = (a.myAssets.length + a.theirAssets.length) - (b.myAssets.length + b.theirAssets.length);
+    if (byTotalAssets !== 0) return byTotalAssets;
+    const byTheirAssets = a.theirAssets.length - b.theirAssets.length;
+    if (byTheirAssets !== 0) return byTheirAssets;
     return a.myAssets.length - b.myAssets.length;
   });
 
@@ -426,7 +459,7 @@ function suggestTrades({ myRoster, theirRoster, targetAsset, values, fairnessPct
 function formatPackageAdjustment(idea) {
   if (!idea.packageAdjustment) return "none";
   const side = idea.packageAdjustmentSide === "my" ? "your side" : "their side";
-  return `+${idea.packageAdjustment} on ${side}`;
+  return `+${formatNumber(idea.packageAdjustment)} on ${side}`;
 }
 
 function calculatePctDiff(a, b) {
@@ -537,6 +570,89 @@ function calculatePackageAdjustment({ myValues, theirValues, globalMaxValue }) {
   };
 }
 
+function buildPackages(assets, values, maxAssets) {
+  const valuedAssets = assets
+    .map((asset) => ({ asset, value: getAssetValue(asset, values) }))
+    .filter((entry) => Number.isFinite(entry.value));
+
+  const packages = [];
+  for (let size = 1; size <= Math.min(maxAssets, valuedAssets.length); size++) {
+    for (const combo of combinationsOfSize(valuedAssets, size)) {
+      packages.push({
+        assets: combo.map((entry) => entry.asset),
+        values: combo.map((entry) => entry.value),
+      });
+    }
+  }
+  return packages;
+}
+
+function buildTargetPackages({ theirRoster, targetAsset, values, allowExtraTargetAssets, maxExtraAssets }) {
+  const targetValue = getAssetValue(targetAsset, values);
+  if (!Number.isFinite(targetValue)) return [];
+
+  const packages = [{ assets: [targetAsset], values: [targetValue] }];
+  if (!allowExtraTargetAssets) return packages;
+
+  const extras = theirRoster.assets
+    .filter((asset) => asset.assetId !== targetAsset.assetId)
+    .map((asset) => ({ asset, value: getAssetValue(asset, values) }))
+    .filter((entry) => Number.isFinite(entry.value));
+
+  for (let size = 1; size <= Math.min(maxExtraAssets, extras.length); size++) {
+    for (const combo of combinationsOfSize(extras, size)) {
+      packages.push({
+        assets: [targetAsset, ...combo.map((entry) => entry.asset)],
+        values: [targetValue, ...combo.map((entry) => entry.value)],
+      });
+    }
+  }
+
+  return packages;
+}
+
+function combinationsOfSize(items, size) {
+  if (size === 0) return [[]];
+  if (size > items.length) return [];
+
+  const out = [];
+  const stack = [];
+
+  function walk(startIndex) {
+    if (stack.length === size) {
+      out.push([...stack]);
+      return;
+    }
+    for (let i = startIndex; i <= items.length - (size - stack.length); i++) {
+      stack.push(items[i]);
+      walk(i + 1);
+      stack.pop();
+    }
+  }
+
+  walk(0);
+  return out;
+}
+
+function renderAssetList(assets, values) {
+  return `
+    <ul class="asset-list">
+      ${assets
+        .map(
+          (asset) => `
+            <li class="asset-item">
+              <span>${asset.name}</span>
+              <span class="asset-value">(${formatNumber(getAssetValue(asset, values))})</span>
+            </li>`
+        )
+        .join("")}
+    </ul>`;
+}
+
+function formatNumber(value) {
+  return Number(value).toLocaleString();
+}
+
 function getAssetValue(asset, values) {
   const exact = values[asset.assetId];
   if (Number.isFinite(exact)) return exact;
@@ -567,11 +683,13 @@ function estimatedValue(asset) {
   return Math.max(300, Math.round(base + ageModifier));
 }
 
-function normalizeRosters(rosters, users, players) {
-  const userById = new Map(users.map((u) => [u.user_id, u]));
+function normalizeRosters(rosters, users, players, previousContext = { league: null, users: [], rosters: [] }) {
+  const userById = new Map(users.map((u) => [String(u.user_id), u]));
+  const rosterById = new Map(rosters.map((roster) => [String(roster.roster_id), roster]));
+  const previousFinishLookup = buildPreviousFinishLookup(previousContext.league, previousContext.rosters);
 
   return rosters.map((roster) => {
-    const owner = userById.get(roster.owner_id) || {};
+    const owner = userById.get(String(roster.owner_id)) || {};
     const playerAssets = (roster.players || []).map((playerId) => {
       const p = players[playerId] || {};
       const name = `${(p.first_name || "").trim()} ${(p.last_name || "").trim()}`.trim() || p.full_name || playerId;
@@ -585,7 +703,7 @@ function normalizeRosters(rosters, users, players) {
 
     const pickAssets = (roster.picks || []).map((pick) => ({
       assetId: `pick:${pick.season}:r${pick.round}:${pick.original_owner || "any"}`,
-      name: `${pick.season} Round ${pick.round} Pick`,
+      name: formatPickName(pick, { userById, rosterById, previousFinishLookup }),
       assetType: "pick",
       raw: pick,
     }));
@@ -594,11 +712,100 @@ function normalizeRosters(rosters, users, players) {
       rosterId: roster.roster_id,
       manager: {
         userId: roster.owner_id || "unknown",
-        displayName: owner.display_name || owner.username || `Roster ${roster.roster_id}`,
+        displayName: displayNameForUser(owner, `Roster ${roster.roster_id}`),
       },
       assets: [...playerAssets, ...pickAssets],
     };
   });
+}
+
+function displayNameForUser(user, fallback) {
+  if (!user) return fallback;
+  return user.display_name || user.username || fallback;
+}
+
+function extractRosterPoints(roster) {
+  const settings = roster?.settings || {};
+  if (settings.fpts == null) return null;
+  return Number(settings.fpts) + Number(settings.fpts_decimal || 0) / 100;
+}
+
+function ordinal(rank) {
+  const mod100 = rank % 100;
+  if (mod100 >= 10 && mod100 <= 20) return `${rank}th`;
+  const suffix = { 1: "st", 2: "nd", 3: "rd" }[rank % 10] || "th";
+  return `${rank}${suffix}`;
+}
+
+function buildPreviousFinishLookup(previousLeague, previousRosters = []) {
+  if (!previousLeague || previousRosters.length === 0) {
+    return { byRosterId: new Map(), byUserId: new Map() };
+  }
+
+  const season = String(previousLeague.season || "previous season");
+  const ranked = previousRosters
+    .map((roster) => ({
+      rosterId: String(roster.roster_id),
+      ownerId: roster.owner_id != null ? String(roster.owner_id) : null,
+      points: extractRosterPoints(roster),
+    }))
+    .filter((entry) => Number.isFinite(entry.points))
+    .sort((a, b) => b.points - a.points || Number(a.rosterId) - Number(b.rosterId));
+
+  const byRosterId = new Map();
+  const byUserId = new Map();
+  ranked.forEach((entry, index) => {
+    const label = `${ordinal(index + 1)} in ${season} PF`;
+    byRosterId.set(entry.rosterId, label);
+    if (entry.ownerId) byUserId.set(entry.ownerId, label);
+  });
+
+  return { byRosterId, byUserId };
+}
+
+function resolvePickOwnerName(originalOwner, rosterById, userById) {
+  if (originalOwner == null) return null;
+
+  const ownerKey = String(originalOwner);
+  const roster = rosterById.get(ownerKey);
+  if (roster) {
+    const owner = roster.owner_id != null ? userById.get(String(roster.owner_id)) : null;
+    return displayNameForUser(owner, `Roster ${roster.roster_id}`);
+  }
+
+  const user = userById.get(ownerKey);
+  if (user) return displayNameForUser(user, ownerKey);
+  return null;
+}
+
+function resolvePreviousFinishLabel(originalOwner, rosterById, previousFinishLookup) {
+  if (originalOwner == null) return null;
+
+  const ownerKey = String(originalOwner);
+  if (previousFinishLookup.byRosterId.has(ownerKey)) return previousFinishLookup.byRosterId.get(ownerKey);
+  if (previousFinishLookup.byUserId.has(ownerKey)) return previousFinishLookup.byUserId.get(ownerKey);
+
+  const roster = rosterById.get(ownerKey);
+  if (!roster) return null;
+
+  const rosterKey = String(roster.roster_id);
+  if (previousFinishLookup.byRosterId.has(rosterKey)) return previousFinishLookup.byRosterId.get(rosterKey);
+
+  const ownerId = roster.owner_id != null ? String(roster.owner_id) : null;
+  if (ownerId && previousFinishLookup.byUserId.has(ownerId)) return previousFinishLookup.byUserId.get(ownerId);
+  return null;
+}
+
+function formatPickName(pick, { userById, rosterById, previousFinishLookup }) {
+  const details = [];
+  const ownerName = resolvePickOwnerName(pick.original_owner, rosterById, userById);
+  if (ownerName) details.push(`from ${ownerName}`);
+
+  const finishLabel = resolvePreviousFinishLabel(pick.original_owner, rosterById, previousFinishLookup);
+  if (finishLabel) details.push(finishLabel);
+
+  const suffix = details.length ? ` (${details.join(", ")})` : "";
+  return `${pick.season} Round ${pick.round} Pick${suffix}`;
 }
 
 async function loadValues(optionalUrl) {

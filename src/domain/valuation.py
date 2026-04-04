@@ -32,7 +32,15 @@ class ValuationService:
         self._max_value = max(max(values.values(), default=0), KTC_GLOBAL_MAX_FALLBACK)
 
     def get_asset_value(self, asset_id: str) -> int | None:
-        return self._values.get(asset_id)
+        exact = self._values.get(asset_id)
+        if exact is not None:
+            return exact
+
+        if asset_id.startswith("pick:"):
+            any_id = asset_id.rsplit(":", 1)[0] + ":any"
+            return self._values.get(any_id)
+
+        return None
 
     def get_many(self, asset_ids: list[str]) -> list[ValuationResult]:
         return [ValuationResult(asset_id=a, value=self.get_asset_value(a)) for a in asset_ids]

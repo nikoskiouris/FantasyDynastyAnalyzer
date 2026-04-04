@@ -56,6 +56,11 @@ input, select, button {
   background: #0b1220;
   color: var(--text);
 }
+input[type="checkbox"] {
+  width: auto;
+  margin: 0.15rem 0 0;
+  accent-color: var(--accent);
+}
 .row {
   display: grid;
   grid-template-columns: 1fr 180px;
@@ -73,6 +78,12 @@ button {
   font-weight: 600;
 }
 button:hover { filter: brightness(1.05); }
+.toggle-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.7rem;
+  margin: 1rem 0;
+}
 .list {
   max-height: 280px;
   overflow: auto;
@@ -96,6 +107,24 @@ button:hover { filter: brightness(1.05); }
   padding: 0.85rem;
   margin-top: 0.75rem;
   background: #0b1220;
+}
+.trade-card p {
+  margin: 0.45rem 0;
+}
+.asset-list {
+  list-style: none;
+  margin: 0.35rem 0 0;
+  padding: 0;
+}
+.asset-item {
+  padding: 0.3rem 0;
+  border-bottom: 1px solid rgba(51, 65, 85, 0.6);
+}
+.asset-item:last-child {
+  border-bottom: none;
+}
+.asset-value {
+  color: var(--muted);
 }
 
 

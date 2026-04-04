@@ -24,6 +24,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-results", type=int, default=5)
     parser.add_argument("--fairness-pct", type=float, default=15.0)
     parser.add_argument("--ktc-url", help="Optional JSON endpoint that returns [{'asset_id':..., 'value':...}]")
+    parser.add_argument(
+        "--allow-extra-target-assets",
+        action="store_true",
+        help="Allow the other manager to include extra players/picks alongside your target player.",
+    )
     return parser.parse_args()
 
 
@@ -39,16 +44,46 @@ def resolve_league_id(client: SleeperClient, league_id: str | None, username: st
     return leagues[0]["league_id"]
 
 
+def format_value(value: int) -> str:
+    return f"{value:,}"
+
+
+def format_asset_with_value(asset, valuation: ValuationService) -> str:
+    value = valuation.get_asset_value(asset.asset_id)
+    if value is None:
+        return asset.name
+    return f"{asset.name} ({format_value(value)})"
+
+
 def main() -> int:
     args = parse_args()
     client = SleeperClient()
 
     try:
         league_id = resolve_league_id(client, args.league, args.username, args.season)
+        league = client.get_league(league_id)
         users = client.get_users_in_league(league_id)
         rosters = client.get_rosters(league_id)
         players = client.get_players("nfl")
-        ctx = build_league_context(league_id, users, rosters, players)
+
+        previous_league = None
+        previous_rosters = None
+        previous_league_id = league.get("previous_league_id")
+        if previous_league_id:
+            try:
+                previous_league = client.get_league(previous_league_id)
+                previous_rosters = client.get_rosters(previous_league_id)
+            except RuntimeError as exc:
+                logging.warning("Could not load previous league context for pick labels: %s", exc)
+
+        ctx = build_league_context(
+            league_id,
+            users,
+            rosters,
+            players,
+            previous_league=previous_league,
+            previous_rosters=previous_rosters,
+        )
 
         my_roster = find_manager_roster(ctx, args.me)
         their_roster = find_manager_roster(ctx, args.target_manager)
@@ -57,7 +92,13 @@ def main() -> int:
         values = KeepTradeCutProvider().load_values(source_url=args.ktc_url)
         valuation = ValuationService(values)
         generator = TradeGenerator(valuation=valuation, fairness_pct=args.fairness_pct)
-        suggestions = generator.generate(my_roster, their_roster, target_asset, max_results=args.max_results)
+        suggestions = generator.generate(
+            my_roster,
+            their_roster,
+            target_asset,
+            max_results=args.max_results,
+            allow_extra_target_assets=args.allow_extra_target_assets,
+        )
 
         if not suggestions:
             print("No fair trades found with current valuation data and fairness threshold.")
@@ -65,21 +106,21 @@ def main() -> int:
 
         print(f"Suggested trades for {my_roster.manager.display_name} to acquire {target_asset.name} from {their_roster.manager.display_name}:")
         for idx, suggestion in enumerate(suggestions, start=1):
-            my_side = ", ".join(asset.name for asset in suggestion.my_assets)
-            their_side = ", ".join(asset.name for asset in suggestion.their_assets)
+            my_side = ", ".join(format_asset_with_value(asset, valuation) for asset in suggestion.my_assets)
+            their_side = ", ".join(format_asset_with_value(asset, valuation) for asset in suggestion.their_assets)
             print(f"\n{idx}. You send: {my_side}")
             print(f"   They send: {their_side}")
-            print(f"   Base value: you {suggestion.my_base_value} vs them {suggestion.their_base_value}")
+            print(f"   Base value: you {format_value(suggestion.my_base_value)} vs them {format_value(suggestion.their_base_value)}")
             if suggestion.package_adjustment:
                 side = "your side" if suggestion.package_adjustment_side == "my" else "their side"
-                print(f"   Package adjustment: +{suggestion.package_adjustment} on {side}")
+                print(f"   Package adjustment: +{format_value(suggestion.package_adjustment)} on {side}")
             else:
                 print("   Package adjustment: none")
             print(
-                f"   KTC-style total: you {suggestion.my_adjusted_value} vs them {suggestion.their_adjusted_value} "
+                f"   KTC-style total: you {format_value(suggestion.my_adjusted_value)} vs them {format_value(suggestion.their_adjusted_value)} "
                 f"(diff {suggestion.pct_diff}%)"
             )
-            print(f"   Add value to even: {suggestion.even_value}")
+            print(f"   Add value to even: {format_value(suggestion.even_value)}")
 
         return 0
     except ValidationError as exc:

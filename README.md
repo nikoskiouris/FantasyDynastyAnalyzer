@@ -13,12 +13,14 @@ The full UI lives in `docs/` and is deployable on GitHub Pages.
 1. Enter Sleeper League ID.
 2. Pick which manager you are.
 3. Search/select the player you want from another roster.
-4. Generate 3–4 trade ideas based on valuation data.
+4. Optionally allow the other manager to include extra players/picks with your target player.
+5. Generate 3–4 trade ideas based on valuation data.
 
 ### Value source behavior
 - Uses optional JSON endpoint if you provide one (shape: `[{"asset_id":"player:8155","value":8200}]`).
 - Falls back to repo sample values in `docs/data/ktc_values_sample.csv`.
 - For assets missing values, uses a lightweight position/age estimate so the UI can still produce suggestions.
+- Draft picks are labeled with their original owner when Sleeper provides it, and will also show prior-season PF finish when the linked previous league is available.
 
 ## GitHub Pages deployment
 A workflow is included at `.github/workflows/deploy-pages.yml`.
@@ -45,6 +47,7 @@ python -m src.cli \
   --me niko \
   --target-manager demetri \
   --target-player "Jahmyr Gibbs" \
+  --allow-extra-target-assets \
   --fairness-pct 15 \
   --max-results 5
 ```
