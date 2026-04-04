@@ -377,6 +377,19 @@ async function apiGetWithRetry(path, { timeoutMs = 25000, retries = 0 } = {}) {
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
+
+function waitForNextPaint() {
+  return new Promise((resolve) => {
+    if (typeof requestAnimationFrame !== "function") {
+      setTimeout(resolve, 0);
+      return;
+    }
+    requestAnimationFrame(() => {
+      requestAnimationFrame(resolve);
+    });
+  });
+}
+
 function getPlayersCache() {
   try {
     const raw = localStorage.getItem(PLAYERS_CACHE_KEY);
@@ -956,6 +969,7 @@ async function generateTradeIdeas() {
   try {
     setButtonLoading(el.generateBtn, true, "Building trade ideas...");
     await ensureValuesLoaded("");
+    await waitForNextPaint();
     const tradeSearchContext = buildTradeSearchContext({
       myRoster: meRoster,
       targetAsset: state.targetAsset,
@@ -1004,6 +1018,7 @@ async function generateTradeIdeas() {
       return;
     }
 
+    await waitForNextPaint();
     const leagueStrengthBaseline = buildLeagueStrengthBaseline({
       league: state.league,
       rosters: state.normalizedRosters,
