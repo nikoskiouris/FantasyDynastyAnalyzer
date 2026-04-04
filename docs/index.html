@@ -18,7 +18,10 @@
           <input id="league-id" placeholder="Example: 1111111111111111111" />
           <button id="load-league-btn">Load League</button>
         </div>
-        <p id="league-status" class="status muted">Waiting for league ID.</p>
+        <p id="league-status" class="status muted">
+          <span id="league-status-loader" class="status-loader hidden" aria-hidden="true"></span>
+          <span id="league-status-text">Waiting for league ID.</span>
+        </p>
       </section>
 
       <section class="card hidden" id="identity-section">

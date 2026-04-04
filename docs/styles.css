@@ -80,3 +80,46 @@ button:hover { filter: brightness(1.05); }
   margin-top: 0.75rem;
   background: #0b1220;
 }
+
+
+.status {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  min-height: 1.3rem;
+}
+.status.loading {
+  color: #7dd3fc;
+}
+.status-loader {
+  width: 0.95rem;
+  height: 0.95rem;
+  border-radius: 999px;
+  background: conic-gradient(from 220deg, #22d3ee, #0ea5e9, #8b5cf6, #22d3ee);
+  box-shadow: 0 0 0 1px rgba(14, 165, 233, 0.3), 0 0 12px rgba(34, 211, 238, 0.35);
+  animation: statusOrbit 0.9s linear infinite, statusPulse 1.4s ease-in-out infinite;
+}
+@keyframes statusOrbit {
+  to { transform: rotate(360deg); }
+}
+@keyframes statusPulse {
+  0%, 100% { filter: brightness(0.9); }
+  50% { filter: brightness(1.35); }
+}
+
+button.loading {
+  position: relative;
+  overflow: hidden;
+  filter: saturate(1.2);
+}
+button.loading::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(110deg, transparent 20%, rgba(255,255,255,0.23) 40%, transparent 60%);
+  transform: translateX(-110%);
+  animation: buttonSweep 1.15s ease-in-out infinite;
+}
+@keyframes buttonSweep {
+  to { transform: translateX(120%); }
+}
