@@ -8,6 +8,9 @@ const KTC_RAW_ELITE_WEIGHT = 0.04;
 const KTC_RAW_TRADE_WEIGHT = 0.09;
 const KTC_RAW_DEPTH_WEIGHT = 0.24;
 const KTC_GLOBAL_MAX_FALLBACK = 9999;
+const AUTOSELECT_MANAGER_BY_LEAGUE = {
+  "1315165104303513600": "NikoSkiouris",
+};
 
 const state = {
   leagueId: "",
@@ -23,6 +26,7 @@ const state = {
   meRosterId: null,
   targetAsset: null,
   values: {},
+  valueNameMap: {},
   targetFilters: {
     players: true,
     picks: false,
@@ -43,45 +47,34 @@ const el = {
   leagueStatus: document.querySelector("#league-status"),
   leagueStatusText: document.querySelector("#league-status-text"),
   leagueStatusLoader: document.querySelector("#league-status-loader"),
-  snapshotLeague: document.querySelector("#snapshot-league"),
-  snapshotManager: document.querySelector("#snapshot-manager"),
-  snapshotTarget: document.querySelector("#snapshot-target"),
-  snapshotPool: document.querySelector("#snapshot-pool"),
   identitySection: document.querySelector("#identity-section"),
   meSelect: document.querySelector("#me-select"),
   playerSection: document.querySelector("#player-section"),
-  targetPlayersToggle: document.querySelector("#target-players-toggle"),
-  targetPicksToggle: document.querySelector("#target-picks-toggle"),
   playerSearch: document.querySelector("#player-search"),
   playerResults: document.querySelector("#player-results"),
   builderSection: document.querySelector("#builder-section"),
-  givePlayersToggle: document.querySelector("#give-players-toggle"),
-  givePicksToggle: document.querySelector("#give-picks-toggle"),
-  myAssetSearch: document.querySelector("#my-asset-search"),
+  includeAssetsToggle: document.querySelector("#include-assets-toggle"),
+  includeAssetsPanel: document.querySelector("#include-assets-panel"),
+  includeAssetsDetails: document.querySelector("#include-assets-details"),
+  includeAssetsSummaryLabel: document.querySelector("#include-assets-summary-label"),
+  includeAssetSearch: document.querySelector("#include-asset-search"),
   myAssetResults: document.querySelector("#my-asset-results"),
-  selectVisibleAssetsBtn: document.querySelector("#select-visible-assets-btn"),
-  clearSelectedAssetsBtn: document.querySelector("#clear-selected-assets-btn"),
-  clearExcludedAssetsBtn: document.querySelector("#clear-excluded-assets-btn"),
   selectedAssetsSummary: document.querySelector("#selected-assets-summary"),
-  excludeAssetSelect: document.querySelector("#exclude-asset-select"),
+  selectedAssetsList: document.querySelector("#selected-assets-list"),
+  excludeAssetsToggle: document.querySelector("#exclude-assets-toggle"),
+  excludeAssetsPanel: document.querySelector("#exclude-assets-panel"),
+  excludeAssetsDetails: document.querySelector("#exclude-assets-details"),
+  excludeAssetsSummaryLabel: document.querySelector("#exclude-assets-summary-label"),
+  excludeAssetSearch: document.querySelector("#exclude-asset-search"),
+  excludeAssetResults: document.querySelector("#exclude-asset-results"),
   excludedAssetsSummary: document.querySelector("#excluded-assets-summary"),
   excludedAssetsList: document.querySelector("#excluded-assets-list"),
   marketSection: document.querySelector("#market-section"),
   positionPremiumSelect: document.querySelector("#position-premium-select"),
   tradeVibeSelect: document.querySelector("#trade-vibe-select"),
   teamStateSelect: document.querySelector("#team-state-select"),
-  pickPremiumToggle: document.querySelector("#pick-premium-toggle"),
-  youthPremiumToggle: document.querySelector("#youth-premium-toggle"),
-  depthPremiumToggle: document.querySelector("#depth-premium-toggle"),
-  protectCoreToggle: document.querySelector("#protect-core-toggle"),
-  protectFirstsToggle: document.querySelector("#protect-firsts-toggle"),
-  preferConsolidationToggle: document.querySelector("#prefer-consolidation-toggle"),
-  swingBigToggle: document.querySelector("#swing-big-toggle"),
   settingsSection: document.querySelector("#settings-section"),
-  fairnessInput: document.querySelector("#fairness-input"),
   maxResultsInput: document.querySelector("#max-results-input"),
-  ktcUrlInput: document.querySelector("#ktc-url-input"),
-  allowExtraTargetAssetsInput: document.querySelector("#allow-extra-target-assets"),
   generateBtn: document.querySelector("#generate-btn"),
   resultsSection: document.querySelector("#results-section"),
   resultsSubtitle: document.querySelector("#results-subtitle"),
@@ -100,18 +93,16 @@ el.playerSearch.addEventListener("input", () => {
   invalidateResults();
   renderPlayerSearch();
 });
-el.targetPlayersToggle?.addEventListener("change", () => updateAssetTypeFilter("target", "players", el.targetPlayersToggle.checked));
-el.targetPicksToggle?.addEventListener("change", () => updateAssetTypeFilter("target", "picks", el.targetPicksToggle.checked));
-el.givePlayersToggle?.addEventListener("change", () => updateAssetTypeFilter("outgoing", "players", el.givePlayersToggle.checked));
-el.givePicksToggle?.addEventListener("change", () => updateAssetTypeFilter("outgoing", "picks", el.givePicksToggle.checked));
-el.myAssetSearch?.addEventListener("input", () => {
+el.includeAssetSearch?.addEventListener("input", () => {
   invalidateResults();
   renderOutgoingAssetSearch();
 });
-el.selectVisibleAssetsBtn?.addEventListener("click", selectVisibleOutgoingAssets);
-el.clearSelectedAssetsBtn?.addEventListener("click", clearSelectedOutgoingAssets);
-el.clearExcludedAssetsBtn?.addEventListener("click", clearExcludedOutgoingAssets);
-el.excludeAssetSelect?.addEventListener("change", handleExcludedAssetSelectChange);
+el.excludeAssetSearch?.addEventListener("input", () => {
+  invalidateResults();
+  renderOutgoingAssetSearch();
+});
+el.includeAssetsToggle?.addEventListener("change", handleIncludeToggleChange);
+el.excludeAssetsToggle?.addEventListener("change", handleExcludeToggleChange);
 [
   el.positionPremiumSelect,
   el.tradeVibeSelect,
@@ -144,34 +135,7 @@ function invalidateResults() {
 }
 
 function renderSessionSnapshot() {
-  const meRosterId = Number(el.meSelect?.value || state.meRosterId);
-  const meRoster = state.normalizedRosters.find((roster) => roster.rosterId === meRosterId) || null;
-
-  if (el.snapshotLeague) {
-    el.snapshotLeague.textContent = state.leagueName || "Waiting for load";
-  }
-  if (el.snapshotManager) {
-    el.snapshotManager.textContent = meRoster?.manager.displayName || (state.normalizedRosters.length ? "Choose manager" : "Choose after load");
-  }
-  if (el.snapshotTarget) {
-    el.snapshotTarget.textContent = state.targetAsset?.name || "No target yet";
-  }
-  if (el.snapshotPool) {
-    if (state.selectedOutgoingAssetIds.size > 0 || state.excludedOutgoingAssetIds.size > 0) {
-      const notes = [];
-      if (state.selectedOutgoingAssetIds.size > 0) {
-        notes.push(`${state.selectedOutgoingAssetIds.size} included`);
-      }
-      if (state.excludedOutgoingAssetIds.size > 0) {
-        notes.push(`${state.excludedOutgoingAssetIds.size} protected`);
-      }
-      el.snapshotPool.textContent = notes.join(" • ");
-    } else if (state.leagueName) {
-      el.snapshotPool.textContent = "Automatic";
-    } else {
-      el.snapshotPool.textContent = "Automatic";
-    }
-  }
+  // Session snapshot UI was intentionally removed in the simplified layout.
 }
 
 async function loadLeague() {
@@ -185,6 +149,13 @@ async function loadLeague() {
   state.targetAsset = null;
   state.selectedOutgoingAssetIds.clear();
   state.excludedOutgoingAssetIds.clear();
+  state.valueNameMap = {};
+  if (el.includeAssetsToggle) el.includeAssetsToggle.checked = false;
+  if (el.excludeAssetsToggle) el.excludeAssetsToggle.checked = false;
+  if (el.includeAssetSearch) el.includeAssetSearch.value = "";
+  if (el.excludeAssetSearch) el.excludeAssetSearch.value = "";
+  if (el.includeAssetsDetails) el.includeAssetsDetails.open = false;
+  if (el.excludeAssetsDetails) el.excludeAssetsDetails.open = false;
   renderSessionSnapshot();
   el.resultsList.innerHTML = "";
   el.resultsSection.classList.add("hidden");
@@ -412,8 +383,16 @@ function hydrateManagerSelector() {
       el.meSelect.appendChild(option);
     });
 
+  const preferredManager = AUTOSELECT_MANAGER_BY_LEAGUE[state.leagueId];
+  const preferredRoster = preferredManager
+    ? state.normalizedRosters.find((roster) => roster.manager.displayName === preferredManager)
+    : null;
   const preservedRoster = state.normalizedRosters.find((roster) => roster.rosterId === selectedRosterId);
-  if (preservedRoster) {
+
+  if (!preservedRoster && preferredRoster) {
+    state.meRosterId = preferredRoster.rosterId;
+    el.meSelect.value = String(preferredRoster.rosterId);
+  } else if (preservedRoster) {
     state.meRosterId = preservedRoster.rosterId;
     el.meSelect.value = String(preservedRoster.rosterId);
   } else if (state.normalizedRosters.length > 0) {
@@ -577,10 +556,24 @@ function pruneSelectedOutgoingAssetsByFilters() {
   );
 }
 
-function handleExcludedAssetSelectChange() {
-  const assetId = el.excludeAssetSelect?.value || "";
-  if (!assetId) return;
-  addExcludedOutgoingAsset(assetId);
+function handleIncludeToggleChange() {
+  invalidateResults();
+  if (!el.includeAssetsToggle?.checked) {
+    state.selectedOutgoingAssetIds.clear();
+    if (el.includeAssetSearch) el.includeAssetSearch.value = "";
+    if (el.includeAssetsDetails) el.includeAssetsDetails.open = false;
+  }
+  renderOutgoingAssetSearch();
+}
+
+function handleExcludeToggleChange() {
+  invalidateResults();
+  if (!el.excludeAssetsToggle?.checked) {
+    state.excludedOutgoingAssetIds.clear();
+    if (el.excludeAssetSearch) el.excludeAssetSearch.value = "";
+    if (el.excludeAssetsDetails) el.excludeAssetsDetails.open = false;
+  }
+  renderOutgoingAssetSearch();
 }
 
 function addExcludedOutgoingAsset(assetId) {
@@ -606,7 +599,7 @@ function getVisibleOutgoingAssets() {
   const meRoster = getMyRoster();
   if (!meRoster) return [];
 
-  const query = el.myAssetSearch?.value.trim().toLowerCase() || "";
+  const query = el.includeAssetSearch?.value.trim().toLowerCase() || "";
   return meRoster.assets
     .filter((asset) => assetTypeAllowed(asset, state.outgoingFilters))
     .filter((asset) => !state.excludedOutgoingAssetIds.has(asset.assetId))
@@ -615,11 +608,16 @@ function getVisibleOutgoingAssets() {
     .slice(0, 150);
 }
 
-function selectVisibleOutgoingAssets() {
-  invalidateResults();
-  const visibleAssets = getVisibleOutgoingAssets();
-  visibleAssets.forEach((asset) => state.selectedOutgoingAssetIds.add(asset.assetId));
-  renderOutgoingAssetSearch();
+function getVisibleExcludedOutgoingAssets() {
+  const meRoster = getMyRoster();
+  if (!meRoster) return [];
+
+  const query = el.excludeAssetSearch?.value.trim().toLowerCase() || "";
+  return meRoster.assets
+    .filter((asset) => assetTypeAllowed(asset, state.outgoingFilters))
+    .filter((asset) => assetMatchesQuery(asset, query))
+    .sort(sortAssetsForList)
+    .slice(0, 150);
 }
 
 function clearSelectedOutgoingAssets() {
@@ -630,6 +628,7 @@ function clearSelectedOutgoingAssets() {
 
 function toggleOutgoingAsset(assetId) {
   invalidateResults();
+  state.excludedOutgoingAssetIds.delete(assetId);
   if (state.selectedOutgoingAssetIds.has(assetId)) {
     state.selectedOutgoingAssetIds.delete(assetId);
   } else {
@@ -638,25 +637,53 @@ function toggleOutgoingAsset(assetId) {
   renderOutgoingAssetSearch();
 }
 
+function toggleExcludedOutgoingAsset(assetId) {
+  invalidateResults();
+  state.selectedOutgoingAssetIds.delete(assetId);
+  if (state.excludedOutgoingAssetIds.has(assetId)) {
+    state.excludedOutgoingAssetIds.delete(assetId);
+  } else {
+    state.excludedOutgoingAssetIds.add(assetId);
+  }
+  renderOutgoingAssetSearch();
+}
+
 function renderOutgoingAssetSearch() {
-  if (!el.myAssetResults) return;
+  if (!el.myAssetResults || !el.excludeAssetResults) return;
   const meRoster = getMyRoster();
-  renderExcludedAssetControls(meRoster);
+  syncBuilderPanels();
+  renderSelectedOutgoingAssets(meRoster);
+  renderExcludedOutgoingAssets(meRoster);
+  updateSelectedAssetsSummary();
+  updateExcludedAssetsSummary();
+
   if (!meRoster) {
     el.myAssetResults.innerHTML = `<div class="player-item muted">Choose your team first.</div>`;
-    updateSelectedAssetsSummary();
+    el.excludeAssetResults.innerHTML = `<div class="player-item muted">Choose your team first.</div>`;
     return;
   }
 
+  renderIncludedAssetPicker(meRoster);
+  renderExcludedAssetPicker(meRoster);
+}
+
+function syncBuilderPanels() {
+  const includeEnabled = Boolean(el.includeAssetsToggle?.checked);
+  const excludeEnabled = Boolean(el.excludeAssetsToggle?.checked);
+
+  el.includeAssetsPanel?.classList.toggle("hidden", !includeEnabled);
+  el.excludeAssetsPanel?.classList.toggle("hidden", !excludeEnabled);
+}
+
+function renderIncludedAssetPicker(meRoster) {
   const visibleAssets = getVisibleOutgoingAssets();
   el.myAssetResults.innerHTML = "";
 
   if (visibleAssets.length === 0) {
     const emptyState = state.excludedOutgoingAssetIds.size > 0
-      ? "No matching assets found outside your protected list."
+      ? "No matching assets found outside your excluded list."
       : "No matching assets found on your roster.";
     el.myAssetResults.innerHTML = `<div class="player-item muted">${emptyState}</div>`;
-    updateSelectedAssetsSummary();
     return;
   }
 
@@ -672,49 +699,66 @@ function renderOutgoingAssetSearch() {
     row.addEventListener("click", () => toggleOutgoingAsset(asset.assetId));
     el.myAssetResults.appendChild(row);
   }
-
-  updateSelectedAssetsSummary();
 }
 
-function renderExcludedAssetControls(meRoster = getMyRoster()) {
-  hydrateExcludedAssetSelect(meRoster);
-  renderExcludedOutgoingAssets(meRoster);
-  updateExcludedAssetsSummary();
-}
+function renderExcludedAssetPicker(meRoster) {
+  const visibleAssets = getVisibleExcludedOutgoingAssets();
+  el.excludeAssetResults.innerHTML = "";
 
-function hydrateExcludedAssetSelect(meRoster = getMyRoster()) {
-  if (!el.excludeAssetSelect) return;
-
-  el.excludeAssetSelect.innerHTML = "";
-
-  const placeholder = document.createElement("option");
-  placeholder.value = "";
-
-  if (!meRoster) {
-    placeholder.textContent = "Choose your team first.";
-    el.excludeAssetSelect.appendChild(placeholder);
-    el.excludeAssetSelect.disabled = true;
+  if (visibleAssets.length === 0) {
+    el.excludeAssetResults.innerHTML = `<div class="player-item muted">No matching assets found on your roster.</div>`;
     return;
   }
 
-  const availableAssets = meRoster.assets
-    .filter((asset) => !state.excludedOutgoingAssetIds.has(asset.assetId))
-    .sort(sortAssetsForList);
+  for (const asset of visibleAssets) {
+    const row = document.createElement("div");
+    const selected = state.excludedOutgoingAssetIds.has(asset.assetId);
+    row.className = `player-item ${selected ? "selected" : ""}`;
+    row.innerHTML = buildAssetPickerMarkup(asset, {
+      values: state.values,
+      contextLabel: selected ? "Excluded from offers" : "",
+      emphasisTags: state.selectedOutgoingAssetIds.has(asset.assetId) ? ["Included"] : [],
+    });
+    row.addEventListener("click", () => toggleExcludedOutgoingAsset(asset.assetId));
+    el.excludeAssetResults.appendChild(row);
+  }
+}
 
-  placeholder.textContent = availableAssets.length > 0
-    ? "Select a player or pick to protect"
-    : "No more assets available to protect";
-  el.excludeAssetSelect.appendChild(placeholder);
+function renderSelectedOutgoingAssets(meRoster = getMyRoster()) {
+  if (!el.selectedAssetsList) return;
 
-  for (const asset of availableAssets) {
-    const option = document.createElement("option");
-    option.value = asset.assetId;
-    option.textContent = buildAssetSelectLabel(asset);
-    el.excludeAssetSelect.appendChild(option);
+  el.selectedAssetsList.innerHTML = "";
+
+  if (!meRoster) {
+    el.selectedAssetsList.innerHTML = `<p class="muted small">Choose your team first.</p>`;
+    return;
   }
 
-  el.excludeAssetSelect.value = "";
-  el.excludeAssetSelect.disabled = availableAssets.length === 0;
+  const includedAssets = meRoster.assets
+    .filter((asset) => state.selectedOutgoingAssetIds.has(asset.assetId))
+    .sort(sortAssetsForList);
+
+  if (includedAssets.length === 0) {
+    el.selectedAssetsList.innerHTML = `<p class="muted small">No included assets selected yet.</p>`;
+    return;
+  }
+
+  const chipRow = document.createElement("div");
+  chipRow.className = "selection-chip-row";
+
+  for (const asset of includedAssets) {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "selection-chip";
+    chip.innerHTML = `
+      <span class="selection-chip-label">${asset.name}</span>
+      <span class="selection-chip-action">Remove</span>
+    `;
+    chip.addEventListener("click", () => toggleOutgoingAsset(asset.assetId));
+    chipRow.appendChild(chip);
+  }
+
+  el.selectedAssetsList.appendChild(chipRow);
 }
 
 function renderExcludedOutgoingAssets(meRoster = getMyRoster()) {
@@ -732,7 +776,7 @@ function renderExcludedOutgoingAssets(meRoster = getMyRoster()) {
     .sort(sortAssetsForList);
 
   if (protectedAssets.length === 0) {
-    el.excludedAssetsList.innerHTML = `<p class="muted small">No protected assets yet.</p>`;
+    el.excludedAssetsList.innerHTML = `<p class="muted small">No excluded assets selected yet.</p>`;
     return;
   }
 
@@ -757,26 +801,36 @@ function renderExcludedOutgoingAssets(meRoster = getMyRoster()) {
 function updateSelectedAssetsSummary() {
   if (!el.selectedAssetsSummary) return;
 
-  if (state.selectedOutgoingAssetIds.size > 0) {
-    el.selectedAssetsSummary.textContent = `Using ${state.selectedOutgoingAssetIds.size} included asset${state.selectedOutgoingAssetIds.size === 1 ? "" : "s"} only.`;
-    renderSessionSnapshot();
-    return;
+  const count = state.selectedOutgoingAssetIds.size;
+  const includeEnabled = Boolean(el.includeAssetsToggle?.checked);
+  el.selectedAssetsSummary.textContent = !includeEnabled
+    ? "Leave this off unless you want to force the generator to use exact assets."
+    : count > 0
+      ? `The generator will only use these ${count} selected asset${count === 1 ? "" : "s"}.`
+      : "Turn this on only if you want to force exact assets into every offer.";
+  if (el.includeAssetsSummaryLabel) {
+    el.includeAssetsSummaryLabel.textContent = count > 0
+      ? `${count} asset${count === 1 ? "" : "s"} selected`
+      : "Select players or picks";
   }
-
-  el.selectedAssetsSummary.textContent = "Leave this blank to let the builder choose from any unprotected asset.";
   renderSessionSnapshot();
 }
 
 function updateExcludedAssetsSummary() {
   if (!el.excludedAssetsSummary) return;
 
-  if (state.excludedOutgoingAssetIds.size > 0) {
-    el.excludedAssetsSummary.textContent = `${state.excludedOutgoingAssetIds.size} protected asset${state.excludedOutgoingAssetIds.size === 1 ? "" : "s"} removed from every idea.`;
-    renderSessionSnapshot();
-    return;
+  const count = state.excludedOutgoingAssetIds.size;
+  const excludeEnabled = Boolean(el.excludeAssetsToggle?.checked);
+  el.excludedAssetsSummary.textContent = !excludeEnabled
+    ? "Leave this off unless you want to keep specific assets out of every offer."
+    : count > 0
+      ? `${count} asset${count === 1 ? "" : "s"} will stay out of every generated idea.`
+      : "Choose any players or picks you do not want to move.";
+  if (el.excludeAssetsSummaryLabel) {
+    el.excludeAssetsSummaryLabel.textContent = count > 0
+      ? `${count} asset${count === 1 ? "" : "s"} excluded`
+      : "Select players or picks";
   }
-
-  el.excludedAssetsSummary.textContent = "Protected assets stay out of every generated idea.";
   renderSessionSnapshot();
 }
 
@@ -850,6 +904,10 @@ async function generateTradeIdeas() {
     alert("Could not resolve rosters.");
     return;
   }
+  if (el.includeAssetsToggle?.checked && state.selectedOutgoingAssetIds.size === 0) {
+    alert("Choose at least one player or pick to throw in, or turn that option off.");
+    return;
+  }
 
   const fairnessPct = DEFAULT_FAIRNESS_PCT;
   const maxResults = clamp(Number(el.maxResultsInput?.value || 3), 1, 6);
@@ -857,9 +915,17 @@ async function generateTradeIdeas() {
 
   try {
     setButtonLoading(el.generateBtn, true, "Building trade ideas...");
-    state.values = await loadValues(el.ktcUrlInput?.value?.trim() || "");
+    const valuationBundle = await loadValues("");
+    state.values = valuationBundle.values;
+    state.valueNameMap = valuationBundle.nameMap;
     renderPlayerSearch();
     renderOutgoingAssetSearch();
+
+    const leagueStrengthBaseline = buildLeagueStrengthBaseline({
+      league: state.league,
+      rosters: state.normalizedRosters,
+      values: state.values,
+    });
 
     const directIdeas = suggestTrades({
       myRoster: meRoster,
@@ -883,7 +949,21 @@ async function generateTradeIdeas() {
       requireExtraTargetAsset: true,
       tradeLab,
     });
-    const totalIdeaCount = directIdeas.length + throwInIdeas.length;
+    const enrichedDirectIdeas = directIdeas.map((idea) => enrichTradeIdea({
+      idea,
+      myRoster: meRoster,
+      theirRoster,
+      values: state.values,
+      leagueStrengthBaseline,
+    }));
+    const enrichedThrowInIdeas = throwInIdeas.map((idea) => enrichTradeIdea({
+      idea,
+      myRoster: meRoster,
+      theirRoster,
+      values: state.values,
+      leagueStrengthBaseline,
+    }));
+    const totalIdeaCount = enrichedDirectIdeas.length + enrichedThrowInIdeas.length;
 
     el.resultsSection.classList.remove("hidden");
     el.resultsSubtitle.textContent = buildResultsSubtitle({
@@ -904,14 +984,14 @@ async function generateTradeIdeas() {
         title: "Direct ideas",
         subtitle: `Straight-up offers for ${state.targetAsset.name} only.`,
         emptyText: "No direct offers survived the value and roster-fit checks.",
-        ideas: directIdeas,
+        ideas: enrichedDirectIdeas,
         values: state.values,
       }),
       renderTradeIdeaGroup({
         title: "Throw-in-back ideas",
         subtitle: `${state.targetAsset.name} plus one smaller piece from their side.`,
         emptyText: "No clean throw-in-back variations fit the current setup.",
-        ideas: throwInIdeas,
+        ideas: enrichedThrowInIdeas,
         values: state.values,
       }),
     ].join("");
@@ -921,6 +1001,29 @@ async function generateTradeIdeas() {
   } finally {
     setButtonLoading(el.generateBtn, false);
   }
+}
+
+function enrichTradeIdea({ idea, myRoster, theirRoster, values, leagueStrengthBaseline }) {
+  return {
+    ...idea,
+    closestEvenAsset: findClosestValuationAsset(
+      idea.evenValue,
+      values,
+      state.valueNameMap,
+      state.normalizedRosters,
+      state.players
+    ),
+    impactAnalysis: buildTradeImpactAnalysis({
+      baseline: leagueStrengthBaseline,
+      league: state.league,
+      rosters: state.normalizedRosters,
+      myRoster,
+      theirRoster,
+      myAssets: idea.myAssets,
+      theirAssets: idea.theirAssets,
+      values,
+    }),
+  };
 }
 
 function getTradeLabSettings() {
@@ -1012,12 +1115,544 @@ function renderTradeCard(idea, index, values) {
         </div>
         <div class="trade-metric">
           <strong>Even-up value</strong>
-          ${formatNumber(idea.evenValue)}
+          ${formatEvenValueDisplay(idea)}
         </div>
       </div>
+      ${idea.impactAnalysis ? renderImpactAnalysis(idea.impactAnalysis, values) : ""}
       <p class="trade-pitch"><strong>Suggested message:</strong> ${idea.pitch}</p>
     </article>
   `;
+}
+
+function formatEvenValueDisplay(idea) {
+  if (!idea.closestEvenAsset) return formatNumber(idea.evenValue);
+  return `${formatNumber(idea.evenValue)} (${idea.closestEvenAsset.name} • ${formatNumber(idea.closestEvenAsset.value)})`;
+}
+
+function renderImpactAnalysis(impactAnalysis, values) {
+  return `
+    <div class="impact-overview">
+      ${renderImpactCard(impactAnalysis.mySide)}
+      ${renderImpactCard(impactAnalysis.theirSide)}
+    </div>
+    <p class="muted small">${impactAnalysis.overallSummary}</p>
+    <details class="lineup-details">
+      <summary>See lineup comparison</summary>
+      <div class="lineup-details-body">
+        ${renderLineupTeamSection(impactAnalysis.mySide, values)}
+        ${renderLineupTeamSection(impactAnalysis.theirSide, values)}
+      </div>
+    </details>
+  `;
+}
+
+function renderImpactCard(side) {
+  return `
+    <section class="impact-card">
+      <h4>${side.title}</h4>
+      <span class="impact-verdict ${side.verdictClass}">${side.verdictLabel}</span>
+      <p class="impact-summary">${side.summary}</p>
+      <div class="impact-metric-list">
+        <div class="impact-metric-row">
+          <strong>Starter rank</strong>
+          <span>${ordinal(side.before.rank)} to ${ordinal(side.after.rank)}</span>
+        </div>
+        <div class="impact-metric-row">
+          <strong>Starter value</strong>
+          <span>${formatDeltaPair(side.before.starterValue, side.after.starterValue)}</span>
+        </div>
+        <div class="impact-metric-row">
+          <strong>Bench value</strong>
+          <span>${formatDeltaPair(side.before.benchValue, side.after.benchValue)}</span>
+        </div>
+        <div class="impact-metric-row">
+          <strong>Total roster value</strong>
+          <span>${formatDeltaPair(side.before.totalValue, side.after.totalValue)}</span>
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+function renderLineupTeamSection(side, values) {
+  return `
+    <section class="lineup-team-section">
+      <div class="lineup-team-header">
+        <h4>${side.title}</h4>
+        <p class="muted small">${side.detailSummary}</p>
+      </div>
+      <div class="lineup-team-grid">
+        ${renderLineupStateCard("Before", side.before, values)}
+        ${renderLineupStateCard("After", side.after, values)}
+      </div>
+    </section>
+  `;
+}
+
+function renderLineupStateCard(label, snapshot, values) {
+  return `
+    <section class="lineup-state">
+      <h5>${label}</h5>
+      <p>${ordinal(snapshot.rank)} lineup • ${formatNumber(snapshot.starterValue)} starters • ${formatNumber(snapshot.benchValue)} bench</p>
+      <ul class="lineup-slot-list">
+        ${snapshot.lineup
+          .map((slotEntry) => `
+            <li class="lineup-slot-item">
+              <span class="lineup-slot-label">${formatRosterSlotLabel(slotEntry.slot)}</span>
+              <span class="lineup-slot-player">${slotEntry.asset ? slotEntry.asset.name : "Open spot"}</span>
+              <span class="lineup-slot-value">${slotEntry.asset ? formatNumber(getAssetValue(slotEntry.asset, values)) : "0"}</span>
+            </li>
+          `)
+          .join("")}
+      </ul>
+      <p class="muted small">Bench headliners</p>
+      <ul class="bench-list">
+        ${snapshot.benchHighlights.length > 0
+          ? snapshot.benchHighlights
+            .map((asset) => `
+              <li class="bench-item">
+                <span class="lineup-slot-player">${asset.name}</span>
+                <span class="lineup-slot-value">${formatNumber(getAssetValue(asset, values))}</span>
+              </li>
+            `)
+            .join("")
+          : `<li class="bench-item"><span class="lineup-slot-player muted">No bench players</span><span class="lineup-slot-value">0</span></li>`}
+      </ul>
+    </section>
+  `;
+}
+
+function formatDeltaPair(before, after) {
+  const delta = after - before;
+  return `${formatNumber(before)} to ${formatNumber(after)} (${delta >= 0 ? "+" : ""}${formatNumber(delta)})`;
+}
+
+function buildLeagueStrengthBaseline({ league, rosters, values }) {
+  const metricsByRosterId = new Map();
+  rosters.forEach((roster) => {
+    metricsByRosterId.set(roster.rosterId, evaluateRosterStrength(roster, values, league));
+  });
+
+  return {
+    metricsByRosterId,
+    ranks: rankRosterMetrics(metricsByRosterId),
+  };
+}
+
+function buildTradeImpactAnalysis({ baseline, league, rosters, myRoster, theirRoster, myAssets, theirAssets, values }) {
+  const myBeforeMetrics = baseline.metricsByRosterId.get(myRoster.rosterId);
+  const theirBeforeMetrics = baseline.metricsByRosterId.get(theirRoster.rosterId);
+  const myAfterRoster = buildRosterAfterTrade(myRoster, theirAssets, myAssets);
+  const theirAfterRoster = buildRosterAfterTrade(theirRoster, myAssets, theirAssets);
+  const myAfterMetrics = evaluateRosterStrength(myAfterRoster, values, league);
+  const theirAfterMetrics = evaluateRosterStrength(theirAfterRoster, values, league);
+
+  const afterMetricsByRosterId = new Map(baseline.metricsByRosterId);
+  afterMetricsByRosterId.set(myRoster.rosterId, myAfterMetrics);
+  afterMetricsByRosterId.set(theirRoster.rosterId, theirAfterMetrics);
+
+  const afterRanks = rankRosterMetrics(afterMetricsByRosterId);
+  const mySide = buildTradeImpactSide({
+    title: "You",
+    managerName: myRoster.manager.displayName,
+    beforeMetrics: myBeforeMetrics,
+    afterMetrics: myAfterMetrics,
+    beforeRank: baseline.ranks.get(myRoster.rosterId) || state.normalizedRosters.length,
+    afterRank: afterRanks.get(myRoster.rosterId) || state.normalizedRosters.length,
+  });
+  const theirSide = buildTradeImpactSide({
+    title: "Them",
+    managerName: theirRoster.manager.displayName,
+    beforeMetrics: theirBeforeMetrics,
+    afterMetrics: theirAfterMetrics,
+    beforeRank: baseline.ranks.get(theirRoster.rosterId) || state.normalizedRosters.length,
+    afterRank: afterRanks.get(theirRoster.rosterId) || state.normalizedRosters.length,
+  });
+
+  return {
+    mySide,
+    theirSide,
+    overallSummary: buildOverallTradeImpactSummary(mySide, theirSide),
+  };
+}
+
+function buildTradeImpactSide({ title, managerName, beforeMetrics, afterMetrics, beforeRank, afterRank }) {
+  const starterDelta = afterMetrics.starterValue - beforeMetrics.starterValue;
+  const benchDelta = afterMetrics.benchValue - beforeMetrics.benchValue;
+  const totalDelta = afterMetrics.totalValue - beforeMetrics.totalValue;
+  const verdict = classifyTradeImpact({ starterDelta, beforeRank, afterRank, totalDelta });
+
+  return {
+    title,
+    managerName,
+    verdictLabel: verdict.label,
+    verdictClass: verdict.className,
+    summary: buildTradeImpactSummary({ beforeRank, afterRank, starterDelta, benchDelta, totalDelta }),
+    detailSummary: `${managerName} • ${ordinal(beforeRank)} to ${ordinal(afterRank)} starting lineup`,
+    before: {
+      ...beforeMetrics,
+      rank: beforeRank,
+    },
+    after: {
+      ...afterMetrics,
+      rank: afterRank,
+    },
+  };
+}
+
+function classifyTradeImpact({ starterDelta, beforeRank, afterRank, totalDelta }) {
+  if (afterRank < beforeRank || starterDelta >= 350) {
+    return { label: "Better weekly lineup", className: "good" };
+  }
+  if (afterRank > beforeRank || starterDelta <= -350) {
+    return { label: "Worse weekly lineup", className: "bad" };
+  }
+  if (totalDelta >= 350) {
+    return { label: "More total value", className: "good" };
+  }
+  if (totalDelta <= -350) {
+    return { label: "Paying a premium", className: "bad" };
+  }
+  return { label: "Mostly neutral", className: "" };
+}
+
+function buildTradeImpactSummary({ beforeRank, afterRank, starterDelta, benchDelta, totalDelta }) {
+  const notes = [];
+
+  if (afterRank < beforeRank) {
+    notes.push(`starting lineup climbs from ${ordinal(beforeRank)} to ${ordinal(afterRank)}`);
+  } else if (afterRank > beforeRank) {
+    notes.push(`starting lineup falls from ${ordinal(beforeRank)} to ${ordinal(afterRank)}`);
+  } else {
+    notes.push(`starting lineup stays ${ordinal(afterRank)}`);
+  }
+
+  notes.push(buildDeltaPhrase("starters", starterDelta));
+  notes.push(buildDeltaPhrase("bench", benchDelta));
+  notes.push(buildDeltaPhrase("total value", totalDelta));
+
+  return `${notes.slice(0, 3).join(", ")}.`;
+}
+
+function buildDeltaPhrase(label, delta) {
+  if (delta === 0) return `${label} flat`;
+  return `${label} ${delta > 0 ? "up" : "down"} ${formatNumber(Math.abs(delta))}`;
+}
+
+function buildOverallTradeImpactSummary(mySide, theirSide) {
+  const myImproved = mySide.after.rank < mySide.before.rank || mySide.after.starterValue > mySide.before.starterValue;
+  const theirImproved = theirSide.after.rank < theirSide.before.rank || theirSide.after.starterValue > theirSide.before.starterValue;
+
+  if (myImproved && !theirImproved) {
+    return `This trade improves your weekly lineup while making theirs weaker or thinner.`;
+  }
+  if (!myImproved && theirImproved) {
+    return `This trade helps their weekly lineup more than yours, even if the value stays close.`;
+  }
+  if (myImproved && theirImproved) {
+    return `This trade improves both starting lineups, so the deal is more about which team values the target archetype most.`;
+  }
+  return `This trade looks more like a value shuffle than a weekly-lineup upgrade for either side.`;
+}
+
+function buildRosterAfterTrade(roster, incomingAssets, outgoingAssets) {
+  const outgoingIds = new Set(outgoingAssets.map((asset) => asset.assetId));
+  return {
+    ...roster,
+    assets: [
+      ...roster.assets.filter((asset) => !outgoingIds.has(asset.assetId)),
+      ...incomingAssets,
+    ],
+  };
+}
+
+function evaluateRosterStrength(roster, values, league) {
+  const starterSlots = getStarterRosterSlots(league);
+  const lineupResult = buildOptimalStartingLineup(roster.assets, starterSlots, values);
+
+  return {
+    lineup: lineupResult.starters,
+    starterValue: lineupResult.starterValue,
+    benchValue: lineupResult.benchValue,
+    benchHighlights: lineupResult.benchAssets.slice(0, 5),
+    totalValue: Math.round(roster.assets.reduce((sum, asset) => sum + getAssetValue(asset, values), 0)),
+  };
+}
+
+function rankRosterMetrics(metricsByRosterId) {
+  const ranked = [...metricsByRosterId.entries()].sort((left, right) => {
+    const strengthComparison = compareRosterStrength(left[1], right[1]);
+    if (strengthComparison !== 0) return strengthComparison;
+    return Number(left[0]) - Number(right[0]);
+  });
+
+  return ranked.reduce((acc, [rosterId], index) => {
+    acc.set(rosterId, index + 1);
+    return acc;
+  }, new Map());
+}
+
+function compareRosterStrength(left, right) {
+  if (right.starterValue !== left.starterValue) return right.starterValue - left.starterValue;
+  if (right.benchValue !== left.benchValue) return right.benchValue - left.benchValue;
+  return right.totalValue - left.totalValue;
+}
+
+function buildOptimalStartingLineup(assets, starterSlots, values) {
+  const playerEntries = assets
+    .filter((asset) => asset.assetType === "player")
+    .map((asset) => ({ asset, value: getAssetValue(asset, values) }))
+    .sort((a, b) => b.value - a.value);
+
+  const candidates = buildLineupCandidatePool(playerEntries, starterSlots);
+  const slotEntries = starterSlots
+    .map((slot, index) => ({ slot, index }))
+    .sort((left, right) => {
+      const eligibleDiff = countEligibleCandidates(candidates, left.slot) - countEligibleCandidates(candidates, right.slot);
+      if (eligibleDiff !== 0) return eligibleDiff;
+      return getSlotFlexWeight(left.slot) - getSlotFlexWeight(right.slot);
+    });
+
+  const memo = new Map();
+  const bestPlan = chooseBestLineup(slotEntries, candidates, 0, 0n, memo);
+  const starters = bestPlan.picks
+    .map((candidateIndex, slotIndex) => ({
+      slot: slotEntries[slotIndex].slot,
+      originalIndex: slotEntries[slotIndex].index,
+      asset: candidateIndex == null ? null : candidates[candidateIndex].asset,
+    }))
+    .sort((left, right) => left.originalIndex - right.originalIndex)
+    .map(({ slot, asset }) => ({ slot, asset }));
+
+  const starterIds = new Set(starters.filter((entry) => entry.asset).map((entry) => entry.asset.assetId));
+  const benchAssets = playerEntries
+    .filter((entry) => !starterIds.has(entry.asset.assetId))
+    .map((entry) => entry.asset);
+
+  return {
+    starters,
+    starterValue: Math.round(starters.reduce((sum, entry) => sum + (entry.asset ? getAssetValue(entry.asset, values) : 0), 0)),
+    benchAssets,
+    benchValue: Math.round(benchAssets.reduce((sum, asset) => sum + getAssetValue(asset, values), 0)),
+  };
+}
+
+function chooseBestLineup(slotEntries, candidates, slotIndex, usedMask, memo) {
+  const memoKey = `${slotIndex}:${usedMask.toString()}`;
+  if (memo.has(memoKey)) return memo.get(memoKey);
+  if (slotIndex >= slotEntries.length) {
+    const emptyResult = { score: 0, picks: [] };
+    memo.set(memoKey, emptyResult);
+    return emptyResult;
+  }
+
+  let bestResult = {
+    score: Number.NEGATIVE_INFINITY,
+    picks: [],
+  };
+  const slot = slotEntries[slotIndex].slot;
+
+  for (let candidateIndex = 0; candidateIndex < candidates.length; candidateIndex += 1) {
+    const candidateBit = 1n << BigInt(candidateIndex);
+    if ((usedMask & candidateBit) !== 0n) continue;
+    if (!assetCanFillRosterSlot(candidates[candidateIndex].asset, slot)) continue;
+
+    const child = chooseBestLineup(slotEntries, candidates, slotIndex + 1, usedMask | candidateBit, memo);
+    const totalScore = candidates[candidateIndex].value + child.score;
+    if (totalScore > bestResult.score) {
+      bestResult = {
+        score: totalScore,
+        picks: [candidateIndex, ...child.picks],
+      };
+    }
+  }
+
+  const skipChild = chooseBestLineup(slotEntries, candidates, slotIndex + 1, usedMask, memo);
+  if (skipChild.score > bestResult.score) {
+    bestResult = {
+      score: skipChild.score,
+      picks: [null, ...skipChild.picks],
+    };
+  }
+
+  memo.set(memoKey, bestResult);
+  return bestResult;
+}
+
+function buildLineupCandidatePool(playerEntries, starterSlots) {
+  const candidateMap = new Map();
+  const maxPerSlot = Math.min(playerEntries.length, Math.max(10, starterSlots.length + 4));
+
+  starterSlots.forEach((slot) => {
+    playerEntries
+      .filter((entry) => assetCanFillRosterSlot(entry.asset, slot))
+      .slice(0, maxPerSlot)
+      .forEach((entry) => {
+        candidateMap.set(entry.asset.assetId, entry);
+      });
+  });
+
+  return [...candidateMap.values()].sort((a, b) => b.value - a.value);
+}
+
+function countEligibleCandidates(candidates, slot) {
+  return candidates.reduce((count, candidate) => count + (assetCanFillRosterSlot(candidate.asset, slot) ? 1 : 0), 0);
+}
+
+function getStarterRosterSlots(league) {
+  const defaultSlots = ["QB", "RB", "RB", "WR", "WR", "TE", "FLEX", "SUPER_FLEX"];
+  const starterlessSlots = new Set(["BN", "BENCH", "IR", "TAXI", "RESERVE", "PUP", "NA"]);
+  const rosterPositions = Array.isArray(league?.roster_positions) && league.roster_positions.length > 0
+    ? league.roster_positions
+    : defaultSlots;
+
+  return rosterPositions
+    .map(normalizeRosterSlot)
+    .filter((slot) => slot && !starterlessSlots.has(slot));
+}
+
+function normalizeRosterSlot(slot) {
+  return String(slot || "")
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, "_")
+    .replace(/-/g, "_");
+}
+
+function getSlotFlexWeight(slot) {
+  return getAllowedPositionsForSlot(slot).size;
+}
+
+function getAllowedPositionsForSlot(slot) {
+  const normalizedSlot = normalizeRosterSlot(slot);
+  const explicitSlotMap = {
+    FLEX: ["RB", "WR", "TE"],
+    WRT: ["RB", "WR", "TE"],
+    WRRB_FLEX: ["RB", "WR"],
+    WRRB: ["RB", "WR"],
+    RBWR_FLEX: ["RB", "WR"],
+    REC_FLEX: ["WR", "TE"],
+    WRTE_FLEX: ["WR", "TE"],
+    SUPER_FLEX: ["QB", "RB", "WR", "TE"],
+    OP: ["QB", "RB", "WR", "TE"],
+    IDP_FLEX: ["DL", "DE", "DT", "LB", "DB", "CB", "S"],
+    DL_LB_FLEX: ["DL", "DE", "DT", "LB"],
+    DB_FLEX: ["DB", "CB", "S"],
+    DL_DB_FLEX: ["DL", "DE", "DT", "DB", "CB", "S"],
+  };
+
+  if (explicitSlotMap[normalizedSlot]) return new Set(explicitSlotMap[normalizedSlot]);
+  if (normalizedSlot.includes("/")) {
+    return new Set(
+      normalizedSlot
+        .split("/")
+        .flatMap((part) => [...getAllowedPositionsForSlot(part)])
+    );
+  }
+
+  return new Set([normalizedSlot]);
+}
+
+function playerPositionsForAsset(asset) {
+  const fantasyPositions = Array.isArray(asset?.raw?.fantasy_positions) ? asset.raw.fantasy_positions : [];
+  const rawPositions = fantasyPositions.length > 0 ? fantasyPositions : [asset?.raw?.position].filter(Boolean);
+  return rawPositions.map((position) => normalizePlayerPosition(position));
+}
+
+function normalizePlayerPosition(position) {
+  const normalized = String(position || "").trim().toUpperCase();
+  if (normalized === "D/ST" || normalized === "DST") return "DEF";
+  return normalized;
+}
+
+function assetCanFillRosterSlot(asset, slot) {
+  if (asset.assetType !== "player") return false;
+  const playerPositions = playerPositionsForAsset(asset);
+  const allowedPositions = getAllowedPositionsForSlot(slot);
+  return playerPositions.some((position) => allowedPositions.has(position));
+}
+
+function formatRosterSlotLabel(slot) {
+  const labels = {
+    SUPER_FLEX: "SFlex",
+    REC_FLEX: "Rec Flex",
+    WRRB_FLEX: "RB/WR",
+    RBWR_FLEX: "RB/WR",
+    WRTE_FLEX: "WR/TE",
+    FLEX: "Flex",
+  };
+  return labels[slot] || slot.replace(/_/g, " ");
+}
+
+function findClosestValuationAsset(targetValue, values, valueNameMap, rosters, players) {
+  if (!Number.isFinite(targetValue) || targetValue <= 0) return null;
+
+  const catalog = buildValuationCatalog(values, valueNameMap, rosters, players);
+  let closestAsset = null;
+
+  catalog.forEach((asset) => {
+    const gap = Math.abs(asset.value - targetValue);
+    if (!closestAsset || gap < closestAsset.gap || (gap === closestAsset.gap && asset.value > closestAsset.value)) {
+      closestAsset = {
+        ...asset,
+        gap,
+      };
+    }
+  });
+
+  return closestAsset;
+}
+
+function buildValuationCatalog(values, valueNameMap, rosters, players) {
+  const catalog = new Map();
+
+  Object.entries(values).forEach(([assetId, value]) => {
+    if (!Number.isFinite(value)) return;
+    catalog.set(assetId, {
+      assetId,
+      name: resolveAssetNameForCatalog(assetId, valueNameMap, players),
+      value,
+    });
+  });
+
+  rosters.forEach((roster) => {
+    roster.assets.forEach((asset) => {
+      const value = getAssetValue(asset, values);
+      if (!Number.isFinite(value)) return;
+      if (!catalog.has(asset.assetId)) {
+        catalog.set(asset.assetId, {
+          assetId: asset.assetId,
+          name: asset.name,
+          value,
+        });
+      }
+    });
+  });
+
+  return [...catalog.values()];
+}
+
+function resolveAssetNameForCatalog(assetId, valueNameMap, players) {
+  if (valueNameMap[assetId]) return valueNameMap[assetId];
+
+  if (assetId.startsWith("player:")) {
+    const playerId = assetId.split(":")[1];
+    const player = players[playerId] || {};
+    return `${(player.first_name || "").trim()} ${(player.last_name || "").trim()}`.trim() || player.full_name || assetId;
+  }
+
+  if (assetId.startsWith("pick:")) {
+    return formatGenericPickAssetLabel(assetId);
+  }
+
+  return assetId;
+}
+
+function formatGenericPickAssetLabel(assetId) {
+  const [, season, roundToken] = assetId.split(":");
+  const round = Number(String(roundToken || "").replace(/^r/i, ""));
+  if (Number.isFinite(round)) return `${season} ${ordinal(round)}`;
+  return assetId;
 }
 
 function suggestTrades({
@@ -1787,23 +2422,34 @@ async function loadValues(optionalUrl) {
 
 function parseCsvValues(csvText) {
   const rows = csvText.trim().split("\n");
-  const out = {};
+  const values = {};
+  const nameMap = {};
   for (let i = 1; i < rows.length; i++) {
-    const [assetId, rawValue] = rows[i].split(",");
+    const [assetId, rawValue, ...rawNameParts] = rows[i].split(",");
     const value = Number(rawValue);
-    if (assetId && Number.isFinite(value)) out[assetId] = value;
+    const name = rawNameParts.join(",").trim();
+    if (assetId && Number.isFinite(value)) {
+      values[assetId] = value;
+      if (name) nameMap[assetId] = name;
+    }
   }
-  return out;
+  return { values, nameMap };
 }
 
 function coerceValueMap(payload) {
   if (Array.isArray(payload)) {
     return payload.reduce((acc, item) => {
-      if (item?.asset_id && Number.isFinite(item.value)) acc[item.asset_id] = item.value;
+      if (item?.asset_id && Number.isFinite(item.value)) {
+        acc.values[item.asset_id] = item.value;
+        if (item.name) acc.nameMap[item.asset_id] = item.name;
+      }
       return acc;
-    }, {});
+    }, { values: {}, nameMap: {} });
   }
-  return payload;
+  return {
+    values: payload?.values && typeof payload.values === "object" ? payload.values : payload,
+    nameMap: payload?.nameMap && typeof payload.nameMap === "object" ? payload.nameMap : {},
+  };
 }
 
 async function apiGet(path, { timeoutMs = 25000 } = {}) {
