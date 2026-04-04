@@ -32,7 +32,7 @@
             <button id="load-league-btn" type="button">Load League</button>
           </div>
           <p class="muted small helper-row">
-            Sample league ID:
+            Try Hard or Die Hard League ID:
             <button id="copy-league-id-btn" type="button" class="linklike" title="Copy league ID to clipboard">1315165104303513600</button>
             <span id="copy-league-id-feedback" class="feedback-chip hidden">Copied!</span>
           </p>
@@ -65,7 +65,13 @@
             <p class="section-copy">Search the rest of the league and choose the player or pick you want back.</p>
           </div>
           <label for="player-search">Search players on other rosters</label>
-          <input id="player-search" placeholder="Start typing a player name..." />
+          <div id="target-search-shell" class="target-search-shell">
+            <div id="target-chip" class="selected-token hidden">
+              <span id="target-chip-label" class="selected-token-label"></span>
+              <button id="clear-target-btn" type="button" class="selected-token-remove" aria-label="Remove selected target">×</button>
+            </div>
+            <input id="player-search" placeholder="Start typing a player name..." />
+          </div>
           <div id="player-results" class="list"></div>
         </section>
 

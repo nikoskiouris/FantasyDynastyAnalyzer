@@ -261,6 +261,90 @@ button:focus-visible {
   box-shadow: 0 0 0 4px rgba(0, 113, 227, 0.12);
 }
 
+.target-search-shell {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  min-height: 3.15rem;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  transition: border-color 140ms ease, box-shadow 140ms ease;
+}
+
+.target-search-shell:hover {
+  border-color: var(--border-strong);
+}
+
+.target-search-shell:focus-within {
+  border-color: var(--blue);
+  box-shadow: 0 0 0 4px rgba(0, 113, 227, 0.12);
+}
+
+.target-search-shell input {
+  min-height: auto;
+  padding: 0.35rem 0;
+  border: none;
+  background: transparent;
+  box-shadow: none;
+}
+
+.target-search-shell input:hover,
+.target-search-shell input:focus-visible {
+  border: none;
+  box-shadow: none;
+}
+
+.target-search-shell.has-token input {
+  display: none;
+}
+
+.selected-token {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  max-width: 100%;
+  padding: 0.42rem 0.55rem 0.42rem 0.8rem;
+  border-radius: 999px;
+  background: #eef0f3;
+  color: var(--text);
+}
+
+.selected-token-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.selected-token-remove {
+  width: 1.35rem;
+  min-width: 1.35rem;
+  min-height: 1.35rem;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  box-shadow: none;
+  opacity: 0;
+  transition: opacity 140ms ease, background 140ms ease, color 140ms ease;
+}
+
+.selected-token:hover .selected-token-remove,
+.selected-token:focus-within .selected-token-remove {
+  opacity: 1;
+}
+
+.selected-token-remove:hover {
+  transform: none;
+  background: rgba(29, 29, 31, 0.08);
+  color: var(--text);
+  box-shadow: none;
+}
+
 .row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 160px;

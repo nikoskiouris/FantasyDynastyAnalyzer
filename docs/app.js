@@ -50,6 +50,10 @@ const el = {
   identitySection: document.querySelector("#identity-section"),
   meSelect: document.querySelector("#me-select"),
   playerSection: document.querySelector("#player-section"),
+  targetSearchShell: document.querySelector("#target-search-shell"),
+  targetChip: document.querySelector("#target-chip"),
+  targetChipLabel: document.querySelector("#target-chip-label"),
+  clearTargetBtn: document.querySelector("#clear-target-btn"),
   playerSearch: document.querySelector("#player-search"),
   playerResults: document.querySelector("#player-results"),
   builderSection: document.querySelector("#builder-section"),
@@ -93,6 +97,7 @@ el.playerSearch.addEventListener("input", () => {
   invalidateResults();
   renderPlayerSearch();
 });
+el.clearTargetBtn?.addEventListener("click", clearTargetAsset);
 el.includeAssetSearch?.addEventListener("input", () => {
   invalidateResults();
   renderOutgoingAssetSearch();
@@ -132,6 +137,30 @@ let copyFeedbackTimer = null;
 
 function invalidateResults() {
   el.resultsSection.classList.add("hidden");
+}
+
+function clearTargetAsset() {
+  invalidateResults();
+  state.targetAsset = null;
+  if (el.playerSearch) el.playerSearch.value = "";
+  renderPlayerSearch();
+}
+
+function syncTargetSearchUi() {
+  const hasTarget = Boolean(state.targetAsset);
+
+  if (el.targetChip) {
+    el.targetChip.classList.toggle("hidden", !hasTarget);
+  }
+  if (el.targetChipLabel) {
+    el.targetChipLabel.textContent = state.targetAsset?.name || "";
+  }
+  if (el.targetSearchShell) {
+    el.targetSearchShell.classList.toggle("has-token", hasTarget);
+  }
+  if (el.playerSearch) {
+    el.playerSearch.placeholder = hasTarget ? "" : "Start typing a player name...";
+  }
 }
 
 function renderSessionSnapshot() {
@@ -462,15 +491,24 @@ function renderPlayerSearch() {
   const meRosterId = Number(el.meSelect.value || state.meRosterId);
   state.meRosterId = meRosterId;
   const query = el.playerSearch.value.trim().toLowerCase();
-  let snapshotNeedsRefresh = false;
 
   if (
     state.targetAsset &&
     (state.targetAsset.managerRosterId === meRosterId || !assetTypeAllowed(state.targetAsset, state.targetFilters))
   ) {
     state.targetAsset = null;
-    snapshotNeedsRefresh = true;
+    if (el.playerSearch) el.playerSearch.value = "";
   }
+
+  syncTargetSearchUi();
+
+  if (state.targetAsset && !query) {
+    el.playerResults.classList.add("hidden");
+    el.playerResults.innerHTML = "";
+    return;
+  }
+
+  el.playerResults.classList.remove("hidden");
 
   const candidates = state.normalizedRosters
     .filter((roster) => roster.rosterId !== meRosterId)
@@ -491,27 +529,24 @@ function renderPlayerSearch() {
 
   if (candidates.length === 0) {
     el.playerResults.innerHTML = `<div class="player-item muted">No matching players or picks found.</div>`;
-    if (snapshotNeedsRefresh) renderSessionSnapshot();
     return;
   }
 
   for (const asset of candidates) {
     const row = document.createElement("div");
-    row.className = `player-item ${state.targetAsset?.assetId === asset.assetId ? "selected" : ""}`;
+    row.className = "player-item";
     row.innerHTML = buildAssetPickerMarkup(asset, {
       values: state.values,
       contextLabel: asset.managerName,
     });
     row.addEventListener("click", () => {
       state.targetAsset = asset;
+      el.playerSearch.value = "";
       el.resultsSection.classList.add("hidden");
-      renderSessionSnapshot();
       renderPlayerSearch();
     });
     el.playerResults.appendChild(row);
   }
-
-  if (snapshotNeedsRefresh) renderSessionSnapshot();
 }
 
 function pruneSelectedOutgoingAssets() {
