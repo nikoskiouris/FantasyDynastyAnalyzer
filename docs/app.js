@@ -1016,14 +1016,14 @@ async function generateTradeIdeas() {
 
     el.resultsList.innerHTML = [
       renderTradeIdeaGroup({
-        title: "Direct ideas",
+        title: "Straight-up offers",
         subtitle: `Straight-up offers for ${state.targetAsset.name} only.`,
-        emptyText: "No direct offers survived the value and roster-fit checks.",
+        emptyText: "No straight-up offers survived the value and roster-fit checks.",
         ideas: enrichedDirectIdeas,
         values: state.values,
       }),
       renderTradeIdeaGroup({
-        title: "Throw-in-back ideas",
+        title: "Add-on-back offers",
         subtitle: `${state.targetAsset.name} plus one smaller piece from their side.`,
         emptyText: "No clean throw-in-back variations fit the current setup.",
         ideas: enrichedThrowInIdeas,
@@ -1041,12 +1041,10 @@ async function generateTradeIdeas() {
 function enrichTradeIdea({ idea, myRoster, theirRoster, values, leagueStrengthBaseline }) {
   return {
     ...idea,
-    closestEvenAsset: findClosestValuationAsset(
+    closestEvenPick: findClosestValuationPick(
       idea.evenValue,
       values,
-      state.valueNameMap,
-      state.normalizedRosters,
-      state.players
+      state.valueNameMap
     ),
     impactAnalysis: buildTradeImpactAnalysis({
       baseline: leagueStrengthBaseline,
@@ -1112,85 +1110,96 @@ function renderTradeIdeaGroup({ title, subtitle, emptyText, ideas, values }) {
 }
 
 function renderTradeCard(idea, index, values) {
+  const evenValueLabel = formatEvenValueDisplay(idea);
+  const isInitiallyOpen = index === 0;
   return `
-    <article class="trade-card">
-      <div class="trade-card-header">
+    <details class="trade-card" ${isInitiallyOpen ? "open" : ""}>
+      <summary class="trade-card-summary">
         <div>
           <h3>Offer ${index + 1}</h3>
-          <p class="trade-style-label">${idea.styleLabel}</p>
-          <p class="muted small">${idea.summary}</p>
+          <p class="trade-card-preview">
+            ${idea.myAssets.length} send • ${idea.theirAssets.length} receive • even-up ${evenValueLabel}
+          </p>
         </div>
-        <span class="trade-score">Score ${idea.labScore}</span>
-      </div>
-      <div class="trade-tag-row">
-        ${idea.tags.map((tag) => `<span class="trade-tag">${tag}</span>`).join("")}
-      </div>
-      <div class="trade-body-grid">
-        <section class="trade-side">
-          <h4>You send</h4>
-          ${renderAssetList(idea.myAssets, values)}
-        </section>
-        <section class="trade-side">
-          <h4>You receive</h4>
-          ${renderAssetList(idea.theirAssets, values)}
-        </section>
-      </div>
-      <div class="trade-metrics">
-        <div class="trade-metric">
-          <strong>KTC balance</strong>
-          you ${formatNumber(idea.myAdjustedValue)} vs them ${formatNumber(idea.theirAdjustedValue)} (${idea.pctDiff}% diff)
+        <span class="trade-card-toggle" aria-hidden="true"></span>
+      </summary>
+      <div class="trade-card-body">
+        <div class="trade-body-grid">
+          <section class="trade-side team-a">
+            <div class="trade-side-heading">
+              <span class="trade-side-kicker">Team A</span>
+              <h4>You send</h4>
+            </div>
+            ${renderAssetList(idea.myAssets, values, "team-a")}
+          </section>
+          <section class="trade-side team-b">
+            <div class="trade-side-heading">
+              <span class="trade-side-kicker">Team B</span>
+              <h4>You receive</h4>
+            </div>
+            ${renderAssetList(idea.theirAssets, values, "team-b")}
+          </section>
         </div>
-        <div class="trade-metric">
-          <strong>Market fit</strong>
-          you ${formatNumber(idea.marketMyValue)} vs them ${formatNumber(idea.marketTheirValue)} (${idea.marketDelta >= 0 ? "+" : ""}${formatNumber(idea.marketDelta)})
+        <div class="trade-metrics">
+          <div class="trade-metric">
+            <strong>KTC balance</strong>
+            you ${formatNumber(idea.myAdjustedValue)} vs them ${formatNumber(idea.theirAdjustedValue)} (${idea.pctDiff}% diff)
+          </div>
+          <div class="trade-metric">
+            <strong>Market fit</strong>
+            you ${formatNumber(idea.marketMyValue)} vs them ${formatNumber(idea.marketTheirValue)} (${idea.marketDelta >= 0 ? "+" : ""}${formatNumber(idea.marketDelta)})
+          </div>
+          <div class="trade-metric">
+            <strong>Package adjustment</strong>
+            ${formatPackageAdjustment(idea)}
+          </div>
+          <div class="trade-metric">
+            <strong>Even-up value</strong>
+            ${evenValueLabel}
+          </div>
         </div>
-        <div class="trade-metric">
-          <strong>Package adjustment</strong>
-          ${formatPackageAdjustment(idea)}
-        </div>
-        <div class="trade-metric">
-          <strong>Even-up value</strong>
-          ${formatEvenValueDisplay(idea)}
-        </div>
-      </div>
-      ${idea.impactAnalysis ? renderImpactAnalysis(idea.impactAnalysis, values) : ""}
-      <p class="trade-pitch"><strong>Suggested message:</strong> ${idea.pitch}</p>
-    </article>
-  `;
-}
-
-function formatEvenValueDisplay(idea) {
-  if (!idea.closestEvenAsset) return formatNumber(idea.evenValue);
-  return `${formatNumber(idea.evenValue)} (${idea.closestEvenAsset.name} • ${formatNumber(idea.closestEvenAsset.value)})`;
-}
-
-function renderImpactAnalysis(impactAnalysis, values) {
-  return `
-    <div class="impact-overview">
-      ${renderImpactCard(impactAnalysis.mySide)}
-      ${renderImpactCard(impactAnalysis.theirSide)}
-    </div>
-    <p class="muted small">${impactAnalysis.overallSummary}</p>
-    <details class="lineup-details">
-      <summary>See lineup comparison</summary>
-      <div class="lineup-details-body">
-        ${renderLineupTeamSection(impactAnalysis.mySide, values)}
-        ${renderLineupTeamSection(impactAnalysis.theirSide, values)}
+        ${idea.impactAnalysis ? renderImpactAnalysis(idea.impactAnalysis, values) : ""}
       </div>
     </details>
   `;
 }
 
-function renderImpactCard(side) {
+function formatEvenValueDisplay(idea) {
+  if (!idea.closestEvenPick) return formatNumber(idea.evenValue);
+  return `${idea.closestEvenPick.name} (${formatNumber(idea.closestEvenPick.value)})`;
+}
+
+function renderImpactAnalysis(impactAnalysis, values) {
   return `
-    <section class="impact-card">
+    <div class="impact-overview">
+      ${renderImpactCard(impactAnalysis.mySide, "team-a")}
+      ${renderImpactCard(impactAnalysis.theirSide, "team-b")}
+    </div>
+    <p class="muted small">${impactAnalysis.overallSummary}</p>
+    <details class="lineup-details">
+      <summary>See lineup comparison</summary>
+      <div class="lineup-details-body">
+        <div class="lineup-comparison-grid">
+          ${renderLineupStateCard("You After", impactAnalysis.mySide.after, values, "team-a")}
+          ${renderLineupStateCard("Them After", impactAnalysis.theirSide.after, values, "team-b")}
+          ${renderLineupStateCard("You Before", impactAnalysis.mySide.before, values, "team-a")}
+          ${renderLineupStateCard("Them Before", impactAnalysis.theirSide.before, values, "team-b")}
+        </div>
+      </div>
+    </details>
+  `;
+}
+
+function renderImpactCard(side, teamClass = "") {
+  return `
+    <section class="impact-card ${teamClass}">
       <h4>${side.title}</h4>
       <span class="impact-verdict ${side.verdictClass}">${side.verdictLabel}</span>
       <p class="impact-summary">${side.summary}</p>
       <div class="impact-metric-list">
         <div class="impact-metric-row">
           <strong>Starter rank</strong>
-          <span>${ordinal(side.before.rank)} to ${ordinal(side.after.rank)}</span>
+          <span>${formatStarterRank(side.before.rank, side.before.totalTeams)} to ${formatStarterRank(side.after.rank, side.after.totalTeams)}</span>
         </div>
         <div class="impact-metric-row">
           <strong>Starter value</strong>
@@ -1209,26 +1218,11 @@ function renderImpactCard(side) {
   `;
 }
 
-function renderLineupTeamSection(side, values) {
+function renderLineupStateCard(label, snapshot, values, teamClass = "") {
   return `
-    <section class="lineup-team-section">
-      <div class="lineup-team-header">
-        <h4>${side.title}</h4>
-        <p class="muted small">${side.detailSummary}</p>
-      </div>
-      <div class="lineup-team-grid">
-        ${renderLineupStateCard("Before", side.before, values)}
-        ${renderLineupStateCard("After", side.after, values)}
-      </div>
-    </section>
-  `;
-}
-
-function renderLineupStateCard(label, snapshot, values) {
-  return `
-    <section class="lineup-state">
+    <section class="lineup-state ${teamClass}">
       <h5>${label}</h5>
-      <p>${ordinal(snapshot.rank)} lineup • ${formatNumber(snapshot.starterValue)} starters • ${formatNumber(snapshot.benchValue)} bench</p>
+      <p>${formatStarterRank(snapshot.rank, snapshot.totalTeams)} lineup • ${formatNumber(snapshot.starterValue)} starters • ${formatNumber(snapshot.benchValue)} bench</p>
       <ul class="lineup-slot-list">
         ${snapshot.lineup
           .map((slotEntry) => `
@@ -1275,6 +1269,7 @@ function buildLeagueStrengthBaseline({ league, rosters, values }) {
 }
 
 function buildTradeImpactAnalysis({ baseline, league, rosters, myRoster, theirRoster, myAssets, theirAssets, values }) {
+  const totalTeams = rosters.length || state.normalizedRosters.length || 0;
   const myBeforeMetrics = baseline.metricsByRosterId.get(myRoster.rosterId);
   const theirBeforeMetrics = baseline.metricsByRosterId.get(theirRoster.rosterId);
   const myAfterRoster = buildRosterAfterTrade(myRoster, theirAssets, myAssets);
@@ -1294,6 +1289,7 @@ function buildTradeImpactAnalysis({ baseline, league, rosters, myRoster, theirRo
     afterMetrics: myAfterMetrics,
     beforeRank: baseline.ranks.get(myRoster.rosterId) || state.normalizedRosters.length,
     afterRank: afterRanks.get(myRoster.rosterId) || state.normalizedRosters.length,
+    totalTeams,
   });
   const theirSide = buildTradeImpactSide({
     title: "Them",
@@ -1302,6 +1298,7 @@ function buildTradeImpactAnalysis({ baseline, league, rosters, myRoster, theirRo
     afterMetrics: theirAfterMetrics,
     beforeRank: baseline.ranks.get(theirRoster.rosterId) || state.normalizedRosters.length,
     afterRank: afterRanks.get(theirRoster.rosterId) || state.normalizedRosters.length,
+    totalTeams,
   });
 
   return {
@@ -1311,7 +1308,7 @@ function buildTradeImpactAnalysis({ baseline, league, rosters, myRoster, theirRo
   };
 }
 
-function buildTradeImpactSide({ title, managerName, beforeMetrics, afterMetrics, beforeRank, afterRank }) {
+function buildTradeImpactSide({ title, managerName, beforeMetrics, afterMetrics, beforeRank, afterRank, totalTeams }) {
   const starterDelta = afterMetrics.starterValue - beforeMetrics.starterValue;
   const benchDelta = afterMetrics.benchValue - beforeMetrics.benchValue;
   const totalDelta = afterMetrics.totalValue - beforeMetrics.totalValue;
@@ -1323,16 +1320,24 @@ function buildTradeImpactSide({ title, managerName, beforeMetrics, afterMetrics,
     verdictLabel: verdict.label,
     verdictClass: verdict.className,
     summary: buildTradeImpactSummary({ beforeRank, afterRank, starterDelta, benchDelta, totalDelta }),
-    detailSummary: `${managerName} • ${ordinal(beforeRank)} to ${ordinal(afterRank)} starting lineup`,
+    detailSummary: `${managerName} • ${formatStarterRank(beforeRank, totalTeams)} to ${formatStarterRank(afterRank, totalTeams)} starting lineup`,
     before: {
       ...beforeMetrics,
       rank: beforeRank,
+      totalTeams,
     },
     after: {
       ...afterMetrics,
       rank: afterRank,
+      totalTeams,
     },
   };
+}
+
+function formatStarterRank(rank, totalTeams) {
+  if (!Number.isFinite(rank)) return "";
+  if (!Number.isFinite(totalTeams) || totalTeams <= 0) return ordinal(rank);
+  return `${ordinal(rank)}/${totalTeams}`;
 }
 
 function classifyTradeImpact({ starterDelta, beforeRank, afterRank, totalDelta }) {
@@ -1619,75 +1624,83 @@ function formatRosterSlotLabel(slot) {
   return labels[slot] || slot.replace(/_/g, " ");
 }
 
-function findClosestValuationAsset(targetValue, values, valueNameMap, rosters, players) {
+function findClosestValuationPick(targetValue, values, valueNameMap) {
   if (!Number.isFinite(targetValue) || targetValue <= 0) return null;
 
-  const catalog = buildValuationCatalog(values, valueNameMap, rosters, players);
-  let closestAsset = null;
+  const catalog = buildPickValuationCatalog(values, valueNameMap);
+  let closestPick = null;
 
-  catalog.forEach((asset) => {
-    const gap = Math.abs(asset.value - targetValue);
-    if (!closestAsset || gap < closestAsset.gap || (gap === closestAsset.gap && asset.value > closestAsset.value)) {
-      closestAsset = {
-        ...asset,
+  catalog.forEach((pick) => {
+    const gap = Math.abs(pick.value - targetValue);
+    if (!closestPick || gap < closestPick.gap || (gap === closestPick.gap && pick.value > closestPick.value)) {
+      closestPick = {
+        ...pick,
         gap,
       };
     }
   });
 
-  return closestAsset;
+  return closestPick;
 }
 
-function buildValuationCatalog(values, valueNameMap, rosters, players) {
-  const catalog = new Map();
-
+function buildPickValuationCatalog(values, valueNameMap) {
+  const catalog = [];
   Object.entries(values).forEach(([assetId, value]) => {
+    if (!assetId.startsWith("pick:")) return;
     if (!Number.isFinite(value)) return;
-    catalog.set(assetId, {
+    catalog.push({
       assetId,
-      name: resolveAssetNameForCatalog(assetId, valueNameMap, players),
+      name: resolvePickNameForCatalog(assetId, valueNameMap),
       value,
     });
   });
 
-  rosters.forEach((roster) => {
-    roster.assets.forEach((asset) => {
-      const value = getAssetValue(asset, values);
-      if (!Number.isFinite(value)) return;
-      if (!catalog.has(asset.assetId)) {
-        catalog.set(asset.assetId, {
-          assetId: asset.assetId,
-          name: asset.name,
-          value,
-        });
-      }
-    });
-  });
-
-  return [...catalog.values()];
+  return catalog;
 }
 
-function resolveAssetNameForCatalog(assetId, valueNameMap, players) {
+function resolvePickNameForCatalog(assetId, valueNameMap) {
   if (valueNameMap[assetId]) return valueNameMap[assetId];
-
-  if (assetId.startsWith("player:")) {
-    const playerId = assetId.split(":")[1];
-    const player = players[playerId] || {};
-    return `${(player.first_name || "").trim()} ${(player.last_name || "").trim()}`.trim() || player.full_name || assetId;
-  }
-
-  if (assetId.startsWith("pick:")) {
-    return formatGenericPickAssetLabel(assetId);
-  }
-
-  return assetId;
+  return formatGenericPickAssetLabel(assetId);
 }
 
 function formatGenericPickAssetLabel(assetId) {
-  const [, season, roundToken] = assetId.split(":");
-  const round = Number(String(roundToken || "").replace(/^r/i, ""));
-  if (Number.isFinite(round)) return `${season} ${ordinal(round)}`;
+  const pickMeta = parsePickAssetId(assetId);
+  if (!pickMeta) return assetId;
+
+  const bucketLabel = pickMeta.bucket && pickMeta.bucket !== "any" ? ` ${formatPickBucketLabel(pickMeta.bucket)}` : "";
+  if (Number.isFinite(pickMeta.round)) return `${pickMeta.season}${bucketLabel} ${ordinal(pickMeta.round)}`;
   return assetId;
+}
+
+function parsePickAssetId(assetId) {
+  if (!assetId.startsWith("pick:")) return null;
+
+  const [, season, ...rest] = assetId.split(":");
+  const roundToken = rest.find((part) => /^r\d+$/i.test(part));
+  const bucketToken = rest.find((part) => /^(any|early|mid|middle|late)$/i.test(part));
+  const round = Number(String(roundToken || "").replace(/^r/i, ""));
+
+  if (!season || !Number.isFinite(round)) return null;
+
+  return {
+    season,
+    round,
+    bucket: normalizePickBucket(bucketToken || "any"),
+  };
+}
+
+function normalizePickBucket(bucket) {
+  const normalized = String(bucket || "any").trim().toLowerCase();
+  if (normalized === "middle") return "mid";
+  return normalized;
+}
+
+function formatPickBucketLabel(bucket) {
+  return {
+    early: "Early",
+    mid: "Mid",
+    late: "Late",
+  }[normalizePickBucket(bucket)] || "";
 }
 
 function suggestTrades({
@@ -1742,7 +1755,6 @@ function suggestTrades({
           theirAssets: theirPackage.assets,
           ...packageResult,
           pctDiff: Number(pctDiff.toFixed(2)),
-          styleLabel: ideaStyle === "throw-in-back" ? "Throw-in back" : "Direct",
           ...labDetails,
         });
       }
@@ -2213,9 +2225,9 @@ function combinationsOfSize(items, size) {
   return out;
 }
 
-function renderAssetList(assets, values) {
+function renderAssetList(assets, values, teamClass = "") {
   return `
-    <ul class="asset-list">
+    <ul class="asset-list ${teamClass}">
       ${assets
         .map(
           (asset) => `

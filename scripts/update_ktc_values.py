@@ -520,6 +520,10 @@ def build_value_map(players: dict, rankings: list[KtcRow]) -> dict[str, int]:
 
     for asset_id, bucket_values in pick_buckets.items():
         values[asset_id] = collapse_pick_bucket_values(bucket_values)
+        for bucket, bucket_value in bucket_values.items():
+            if bucket == "any":
+                continue
+            values[build_bucket_pick_asset_id(asset_id, bucket)] = bucket_value
 
     return values
 
@@ -549,6 +553,19 @@ def collapse_pick_bucket_values(bucket_values: dict[str, int]) -> int:
     return 0
 
 
+def build_bucket_pick_asset_id(asset_id: str, bucket: str) -> str:
+    match = re.match(r"pick:(\d{4}):r(\d):any", asset_id)
+    if not match:
+        return asset_id
+    season, round_ = match.groups()
+    return f"pick:{season}:r{round_}:{bucket}"
+
+
+def format_pick_round(round_: str) -> str:
+    suffix = {"1": "st", "2": "nd", "3": "rd"}.get(round_, "th")
+    return f"{round_}{suffix}"
+
+
 def write_values_csv(path: Path, values: dict[str, int], players: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8") as file_obj:
@@ -564,10 +581,11 @@ def resolve_asset_name(asset_id: str, players: dict) -> str:
         meta = players.get(player_id, {})
         return meta.get("full_name") or build_full_name(meta) or player_id
 
-    match = re.match(r"pick:(\d{4}):r(\d):any", asset_id)
+    match = re.match(r"pick:(\d{4}):r(\d):(any|early|mid|late)", asset_id)
     if match:
-        season, round_ = match.groups()
-        return f"{season} Round {round_} Pick"
+        season, round_, bucket = match.groups()
+        bucket_label = "" if bucket == "any" else f" {bucket.title()}"
+        return f"{season}{bucket_label} {format_pick_round(round_)} Pick"
 
     return asset_id
 
