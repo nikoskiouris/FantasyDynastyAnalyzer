@@ -463,12 +463,12 @@ button:disabled {
   max-height: 360px;
   overflow: auto;
   border: 1px solid var(--border);
-  border-radius: 20px;
+  border-radius: 18px;
   background: var(--surface-soft);
 }
 
 .player-item {
-  padding: 1rem 1.05rem;
+  padding: 0.78rem 0.9rem;
   border-bottom: 1px solid var(--border-soft);
   cursor: pointer;
   transition: background 140ms ease, box-shadow 140ms ease;
@@ -493,64 +493,65 @@ button:disabled {
 
 .asset-row-top {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
-  gap: 0.8rem;
+  gap: 0.7rem;
 }
 
 .asset-name-stack {
   display: grid;
-  gap: 0.18rem;
+  gap: 0.35rem;
   min-width: 0;
+  flex: 1 1 auto;
 }
 
 .asset-name-stack strong {
-  font-size: 1rem;
+  font-size: 0.97rem;
+  line-height: 1.2;
 }
 
 .asset-context {
   color: var(--muted);
-  font-size: 0.87rem;
+  font-size: 0.74rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
 }
 
 .asset-value-badge {
   display: inline-flex;
   align-items: center;
   white-space: nowrap;
-  padding: 0.36rem 0.68rem;
+  flex-shrink: 0;
+  padding: 0.26rem 0.56rem;
   border-radius: 999px;
-  background: #eef0f3;
-  color: var(--text);
-  font-size: 0.82rem;
-  font-weight: 600;
+  background: #f0f2f5;
+  color: #42464d;
+  font-size: 0.78rem;
+  font-weight: 700;
 }
 
 .asset-meta {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.45rem;
-  margin-top: 0.65rem;
+  align-items: center;
+  gap: 0.32rem;
+  margin-top: 0;
 }
 
 .asset-pill {
   display: inline-flex;
   align-items: center;
-  padding: 0.28rem 0.56rem;
+  padding: 0.16rem 0.42rem;
   border-radius: 999px;
   background: #f1f2f4;
   color: var(--muted);
-  font-size: 0.77rem;
+  font-size: 0.71rem;
   font-weight: 700;
 }
 
 .asset-pill.gold {
   background: var(--gold-soft);
   color: var(--gold);
-}
-
-.asset-pill.rose {
-  background: var(--rose-soft);
-  color: var(--rose);
 }
 
 .selection-chip-list {

@@ -4,6 +4,9 @@ const PLAYERS_CACHE_KEY = "fda_players_nfl_cache_v1";
 const PLAYERS_CACHE_TTL_MS = 1000 * 60 * 60 * 24;
 const DEFAULT_FAIRNESS_PCT = 20;
 const OUTGOING_POOL_LIMIT = 18;
+const DEFAULT_MAX_OUTGOING_PACKAGE_SIZE = 5;
+const ELITE_MAX_OUTGOING_PACKAGE_SIZE = 6;
+const ELITE_TARGET_VALUE_THRESHOLD = 7000;
 const MIN_OUTGOING_ASSET_VALUE = 450;
 const LINEUP_EXACT_SOLVER_CANDIDATE_LIMIT = 14;
 const LINEUP_EXACT_SOLVER_SLOT_LIMIT = 11;
@@ -498,8 +501,9 @@ function assetMatchesQuery(asset, query) {
   if (!query) return true;
   const pickSeason = asset.raw?.season != null ? String(asset.raw.season) : "";
   const pickRound = asset.raw?.round != null ? `round ${asset.raw.round}` : "";
+  const pickBucket = asset.assetType === "pick" ? formatPickBucketLabel(getAssetPickBucket(asset)) : "";
   const position = playerPositionForAsset(asset);
-  const haystack = [asset.name, pickSeason, pickRound, position, asset.assetType].join(" ").toLowerCase();
+  const haystack = [asset.name, pickSeason, pickRound, pickBucket, position, asset.assetType].join(" ").toLowerCase();
   return haystack.includes(query);
 }
 
@@ -722,8 +726,8 @@ function renderOutgoingAssetSearch() {
     return;
   }
 
-  renderIncludedAssetPicker(meRoster);
-  renderExcludedAssetPicker(meRoster);
+  renderIncludedAssetPicker();
+  renderExcludedAssetPicker();
 }
 
 function syncBuilderPanels() {
@@ -734,7 +738,7 @@ function syncBuilderPanels() {
   el.excludeAssetsPanel?.classList.toggle("hidden", !excludeEnabled);
 }
 
-function renderIncludedAssetPicker(meRoster) {
+function renderIncludedAssetPicker() {
   const visibleAssets = getVisibleOutgoingAssets();
   el.myAssetResults.innerHTML = "";
 
@@ -752,15 +756,14 @@ function renderIncludedAssetPicker(meRoster) {
     row.className = `player-item ${selected ? "selected" : ""}`;
     row.innerHTML = buildAssetPickerMarkup(asset, {
       values: state.values,
-      contextLabel: selected ? "Included in offers" : "",
-      emphasisTags: getProtectionTags(asset, meRoster, state.values),
+      contextLabel: selected ? "Included" : "",
     });
     row.addEventListener("click", () => toggleOutgoingAsset(asset.assetId));
     el.myAssetResults.appendChild(row);
   }
 }
 
-function renderExcludedAssetPicker(meRoster) {
+function renderExcludedAssetPicker() {
   const visibleAssets = getVisibleExcludedOutgoingAssets();
   el.excludeAssetResults.innerHTML = "";
 
@@ -775,8 +778,7 @@ function renderExcludedAssetPicker(meRoster) {
     row.className = `player-item ${selected ? "selected" : ""}`;
     row.innerHTML = buildAssetPickerMarkup(asset, {
       values: state.values,
-      contextLabel: selected ? "Excluded from offers" : "",
-      emphasisTags: state.selectedOutgoingAssetIds.has(asset.assetId) ? ["Included"] : [],
+      contextLabel: selected ? "Excluded" : "",
     });
     row.addEventListener("click", () => toggleExcludedOutgoingAsset(asset.assetId));
     el.excludeAssetResults.appendChild(row);
@@ -907,7 +909,7 @@ function buildAssetSelectLabel(asset) {
   return details.length > 0 ? `${asset.name} - ${details.join(" - ")}` : asset.name;
 }
 
-function buildAssetPickerMarkup(asset, { values, contextLabel, emphasisTags = [] } = {}) {
+function buildAssetPickerMarkup(asset, { values, contextLabel } = {}) {
   const pills = [];
   pills.push(`<span class="asset-pill ${asset.assetType === "pick" ? "gold" : ""}">${asset.assetType === "pick" ? "Pick" : playerPositionForAsset(asset) || "Player"}</span>`);
 
@@ -916,35 +918,26 @@ function buildAssetPickerMarkup(asset, { values, contextLabel, emphasisTags = []
   }
 
   if (asset.assetType === "pick") {
+    const pickBucket = getAssetPickBucket(asset);
+    if (Number(asset.raw?.round) === 1 && pickBucket !== "any") {
+      pills.push(`<span class="asset-pill gold">${formatPickBucketLabel(pickBucket)}</span>`);
+    }
     if (asset.raw?.season) pills.push(`<span class="asset-pill">${asset.raw.season}</span>`);
     if (asset.raw?.round) pills.push(`<span class="asset-pill">R${asset.raw.round}</span>`);
   }
-
-  emphasisTags.slice(0, 2).forEach((tag) => pills.push(`<span class="asset-pill rose">${tag}</span>`));
 
   return `
     <div class="asset-row-top">
       <div class="asset-name-stack">
         <strong>${asset.name}</strong>
-        ${contextLabel ? `<span class="asset-context">${contextLabel}</span>` : ""}
+        <div class="asset-meta">
+          ${pills.join("")}
+          ${contextLabel ? `<span class="asset-context">${contextLabel}</span>` : ""}
+        </div>
       </div>
-      <span class="asset-value-badge">Value ${formatNumber(getAssetValue(asset, values))}</span>
-    </div>
-    <div class="asset-meta">
-      ${pills.join("")}
+      <span class="asset-value-badge">${formatNumber(getAssetValue(asset, values))}</span>
     </div>
   `;
-}
-
-function getProtectionTags(asset, myRoster, values) {
-  const tags = [];
-  if (getCoreAssetIdSet(myRoster, values).has(asset.assetId)) {
-    tags.push("Core");
-  }
-  if (isFirstRoundPick(asset)) {
-    tags.push("1st");
-  }
-  return tags;
 }
 
 async function generateTradeIdeas() {
@@ -1716,12 +1709,16 @@ function findClosestValuationPick(targetValue, values, valueNameMap) {
 function buildPickValuationCatalog(values, valueNameMap) {
   const catalog = [];
   Object.entries(values).forEach(([assetId, value]) => {
-    if (!assetId.startsWith("pick:")) return;
     if (!Number.isFinite(value)) return;
+    const pickMeta = parsePickAssetId(assetId) || parsePickDescriptor(valueNameMap[assetId] || assetId);
+    if (!pickMeta) return;
     catalog.push({
       assetId,
       name: resolvePickNameForCatalog(assetId, valueNameMap),
       value,
+      season: pickMeta.season,
+      round: pickMeta.round,
+      bucket: normalizePickBucket(pickMeta.bucket),
     });
   });
 
@@ -1743,12 +1740,12 @@ function formatGenericPickAssetLabel(assetId) {
 }
 
 function parsePickAssetId(assetId) {
-  if (!assetId.startsWith("pick:")) return null;
+  if (!String(assetId || "").startsWith("pick:")) return null;
 
   const [, season, ...rest] = assetId.split(":");
-  const roundToken = rest.find((part) => /^r\d+$/i.test(part));
+  const roundToken = rest.find((part) => /^r\d+$/i.test(part) || /^\d+$/i.test(part) || /^(?:\d+)(?:st|nd|rd|th)$/i.test(part));
   const bucketToken = rest.find((part) => /^(any|early|mid|middle|late)$/i.test(part));
-  const round = Number(String(roundToken || "").replace(/^r/i, ""));
+  const round = parsePickRoundToken(roundToken);
 
   if (!season || !Number.isFinite(round)) return null;
 
@@ -1765,12 +1762,133 @@ function normalizePickBucket(bucket) {
   return normalized;
 }
 
+function getPickBucketAliases(bucket) {
+  const normalized = normalizePickBucket(bucket);
+  if (normalized === "mid") return ["mid", "middle"];
+  return [normalized];
+}
+
 function formatPickBucketLabel(bucket) {
   return {
     early: "Early",
-    mid: "Mid",
+    mid: "Middle",
     late: "Late",
   }[normalizePickBucket(bucket)] || "";
+}
+
+function parsePickRoundToken(token) {
+  const normalized = String(token || "").trim().toLowerCase();
+  if (!normalized) return null;
+  if (/^r\d+$/.test(normalized)) return Number(normalized.slice(1));
+  if (/^\d+$/.test(normalized)) return Number(normalized);
+  if (/^\d+(st|nd|rd|th)$/.test(normalized)) return Number.parseInt(normalized, 10);
+  return null;
+}
+
+function parsePickDescriptor(input) {
+  const source = String(input || "").trim();
+  if (!source) return null;
+
+  const seasonMatch = source.match(/\b(20\d{2})\b/);
+  const bucketMatch = source.match(/\b(early|mid|middle|late)\b/i);
+  const roundMatch = source.match(/\b(\d+)(?:st|nd|rd|th)\b/i) || source.match(/\br(?:ound)?\s*(\d+)\b/i);
+
+  const season = seasonMatch?.[1];
+  const round = roundMatch ? Number(roundMatch[1]) : null;
+  if (!season || !Number.isFinite(round)) return null;
+
+  return {
+    season,
+    round,
+    bucket: normalizePickBucket(bucketMatch?.[1] || "any"),
+  };
+}
+
+function getAssetPickBucket(asset) {
+  if (asset?.assetType !== "pick") return "any";
+  return normalizePickBucket(asset?.raw?.ktcBucket || asset?.valueBucket || "any");
+}
+
+function buildPickLookupMeta(asset) {
+  if (asset?.assetType !== "pick") return null;
+
+  const valueMeta = parsePickAssetId(asset.valueAssetId || "");
+  if (valueMeta) return valueMeta;
+
+  const assetMeta = parsePickAssetId(asset.assetId || "");
+  if (assetMeta) {
+    return {
+      ...assetMeta,
+      bucket: assetMeta.round === 1 ? getAssetPickBucket(asset) : assetMeta.bucket,
+    };
+  }
+
+  const season = asset?.raw?.season != null ? String(asset.raw.season) : "";
+  const round = Number(asset?.raw?.round);
+  if (!season || !Number.isFinite(round)) return null;
+
+  return {
+    season,
+    round,
+    bucket: round === 1 ? getAssetPickBucket(asset) : "any",
+  };
+}
+
+function buildPickValueLookupIds(asset) {
+  const meta = buildPickLookupMeta(asset);
+  if (!meta) return [];
+
+  const ids = [];
+  const seen = new Set();
+  const push = (id) => {
+    if (!id || seen.has(id)) return;
+    seen.add(id);
+    ids.push(id);
+  };
+
+  if (asset.valueAssetId) push(asset.valueAssetId);
+
+  if (meta.round === 1) {
+    getPickBucketAliases(meta.bucket).forEach((bucket) => push(`pick:${meta.season}:r${meta.round}:${bucket}`));
+  }
+  push(`pick:${meta.season}:r${meta.round}:any`);
+
+  return ids;
+}
+
+function findPickCatalogValue(meta, values, valueNameMap) {
+  if (!meta) return null;
+  const catalog = state.pickValueCatalog.length > 0
+    ? state.pickValueCatalog
+    : buildPickValuationCatalog(values, valueNameMap);
+  const desiredBuckets = meta.round === 1
+    ? [...getPickBucketAliases(meta.bucket), "any"]
+    : ["any"];
+
+  for (const bucket of desiredBuckets) {
+    const exact = catalog.find((pick) =>
+      pick.season === meta.season
+      && pick.round === meta.round
+      && pick.bucket === normalizePickBucket(bucket)
+    );
+    if (exact) return exact.value;
+  }
+
+  const numericSeason = Number(meta.season);
+  if (!Number.isFinite(numericSeason)) return null;
+
+  const nearest = catalog
+    .filter((pick) => pick.round === meta.round && desiredBuckets.includes(pick.bucket))
+    .sort((a, b) => Math.abs(Number(a.season) - numericSeason) - Math.abs(Number(b.season) - numericSeason))[0];
+
+  return nearest?.value ?? null;
+}
+
+function resolvePickAssetValue(asset, values, valueNameMap = state.valueNameMap) {
+  for (const candidateId of buildPickValueLookupIds(asset)) {
+    if (Number.isFinite(values[candidateId])) return values[candidateId];
+  }
+  return findPickCatalogValue(buildPickLookupMeta(asset), values, valueNameMap);
 }
 
 function suggestTrades({
@@ -1794,7 +1912,8 @@ function suggestTrades({
   if (myAssetPool.length === 0) return [];
 
   const globalMaxValue = searchContext?.globalMaxValue ?? getGlobalMaxPlayerValue(values, targetValue);
-  const myPackages = searchContext?.myPackages || buildPackages(myAssetPool, values, 3);
+  const maxOutgoingAssets = searchContext?.maxOutgoingAssets ?? getMaxOutgoingPackageSize(targetValue);
+  const myPackages = searchContext?.myPackages || buildPackages(myAssetPool, values, maxOutgoingAssets);
   const theirPackages = buildTargetPackages({ theirRoster, targetAsset, values, allowExtraTargetAssets, maxExtraAssets: 1 }).filter(
     (pkg) => (requireExtraTargetAsset ? pkg.assets.length > 1 : pkg.assets.length === 1)
   );
@@ -1861,14 +1980,15 @@ function buildTradeSearchContext({ myRoster, targetAsset, values, fairnessPct, t
     targetValue,
     coreAssetIds,
     myAssetPool,
-    myPackages: buildPackages(myAssetPool, values, 3),
+    maxOutgoingAssets: getMaxOutgoingPackageSize(targetValue),
+    myPackages: buildPackages(myAssetPool, values, getMaxOutgoingPackageSize(targetValue)),
     globalMaxValue: Math.max(state.globalMaxPlayerValue || KTC_GLOBAL_MAX_FALLBACK, targetValue),
     effectiveFairnessPct: getEffectiveFairnessPct(fairnessPct, tradeLab.tradeVibe),
   };
 }
 
 function resolveOutgoingAssetPool({ myRoster, values, tradeLab, targetValue = 0, coreAssetIds = null }) {
-  let pool = myRoster.assets.filter((asset) =>
+  const pool = myRoster.assets.filter((asset) =>
     !tradeLab.excludedOutgoingAssetIds.has(asset.assetId)
     && (
       (asset.assetType === "player" && tradeLab.allowPlayers)
@@ -1881,25 +2001,17 @@ function resolveOutgoingAssetPool({ myRoster, values, tradeLab, targetValue = 0,
   }
 
   const resolvedCoreAssetIds = coreAssetIds || getCoreAssetIdSet(myRoster, values);
-  const nonCorePool = pool.filter((asset) => !resolvedCoreAssetIds.has(asset.assetId));
-  if (nonCorePool.length >= 3) {
-    pool = nonCorePool;
-  }
-
-  if (tradeLab.teamState === "rebuilding") {
-    const nonPremiumFuture = pool.filter((asset) => !isFirstRoundPick(asset));
-    if (nonPremiumFuture.length >= 3) {
-      pool = nonPremiumFuture;
-    }
-  }
-
-  return limitOutgoingAssetPool(pool, values, targetValue);
+  return limitOutgoingAssetPool(pool, values, targetValue, {
+    coreAssetIds: resolvedCoreAssetIds,
+    teamState: tradeLab.teamState,
+  });
 }
 
-function limitOutgoingAssetPool(pool, values, targetValue) {
+function limitOutgoingAssetPool(pool, values, targetValue, { coreAssetIds = new Set(), teamState = "middle" } = {}) {
   if (pool.length <= OUTGOING_POOL_LIMIT) return pool;
 
   const usefulValueFloor = Math.max(MIN_OUTGOING_ASSET_VALUE, Math.round(targetValue * 0.14));
+  const eliteTarget = targetValue >= ELITE_TARGET_VALUE_THRESHOLD;
   const prioritized = pool
     .map((asset) => {
       const value = getAssetValue(asset, values);
@@ -1907,7 +2019,10 @@ function limitOutgoingAssetPool(pool, values, targetValue) {
       let score = Math.max(0, 1.35 - Math.min(relativeGap, 1.35)) * 1000;
       score += Math.min(value, targetValue || value) * 0.02;
       if (value >= usefulValueFloor) score += 200;
-      if (asset.assetType === "pick") score += isFirstRoundPick(asset) ? 160 : 40;
+      if (asset.assetType === "pick") score += isFirstRoundPick(asset) ? 220 : 60;
+      if (coreAssetIds.has(asset.assetId)) score -= eliteTarget ? 120 : 260;
+      if (teamState === "rebuilding" && isFirstRoundPick(asset)) score -= 90;
+      if (teamState === "contending" && isFirstRoundPick(asset)) score += 40;
       return { asset, value, score };
     })
     .sort((a, b) => b.score - a.score || b.value - a.value || a.asset.name.localeCompare(b.asset.name));
@@ -1921,7 +2036,11 @@ function limitOutgoingAssetPool(pool, values, targetValue) {
   };
 
   prioritized
-    .filter((entry) => entry.value >= usefulValueFloor || isFirstRoundPick(entry.asset))
+    .filter((entry) =>
+      entry.value >= usefulValueFloor
+      || isFirstRoundPick(entry.asset)
+      || (eliteTarget && coreAssetIds.has(entry.asset.assetId))
+    )
     .slice(0, OUTGOING_POOL_LIMIT)
     .forEach(keepEntry);
 
@@ -1931,6 +2050,13 @@ function limitOutgoingAssetPool(pool, values, targetValue) {
   }
 
   return kept;
+}
+
+function getMaxOutgoingPackageSize(targetValue) {
+  if (!Number.isFinite(targetValue)) return DEFAULT_MAX_OUTGOING_PACKAGE_SIZE;
+  if (targetValue >= ELITE_TARGET_VALUE_THRESHOLD) return ELITE_MAX_OUTGOING_PACKAGE_SIZE;
+  if (targetValue >= 5000) return DEFAULT_MAX_OUTGOING_PACKAGE_SIZE;
+  return 4;
 }
 
 function getEffectiveFairnessPct(fairnessPct, tradeVibe) {
@@ -2387,8 +2513,8 @@ function getAssetValue(asset, values) {
   if (Number.isFinite(exact)) return exact;
 
   if (asset.assetType === "pick") {
-    const anyId = asset.assetId.replace(/:[^:]+$/, ":any");
-    if (Number.isFinite(values[anyId])) return values[anyId];
+    const resolvedPickValue = resolvePickAssetValue(asset, values);
+    if (Number.isFinite(resolvedPickValue)) return resolvedPickValue;
   }
 
   return estimatedValue(asset);
@@ -2403,6 +2529,8 @@ function formatAssetSecondaryLabel(asset, values) {
     if (Number.isFinite(age)) parts.push(`${age}y`);
   } else {
     if (asset.raw?.season) parts.push(String(asset.raw.season));
+    const pickBucket = getAssetPickBucket(asset);
+    if (Number(asset.raw?.round) === 1 && pickBucket !== "any") parts.push(formatPickBucketLabel(pickBucket));
     if (asset.raw?.round) parts.push(`R${asset.raw.round}`);
   }
   return `(${parts.join(" • ")})`;
@@ -2493,12 +2621,22 @@ function normalizeRosters(rosters, users, players, previousContext = { league: n
       };
     });
 
-    const pickAssets = (roster.picks || []).map((pick) => ({
-      assetId: `pick:${pick.season}:r${pick.round}:${pick.original_owner || "any"}`,
-      name: formatPickName(pick, { userById, rosterById, previousFinishLookup }),
-      assetType: "pick",
-      raw: pick,
-    }));
+    const pickAssets = (roster.picks || []).map((pick) => {
+      const finishInfo = resolvePreviousFinishInfo(pick.original_owner, rosterById, previousFinishLookup);
+      const pickBucket = Number(pick.round) === 1 ? finishInfo?.bucket || "any" : "any";
+      return {
+        assetId: `pick:${pick.season}:r${pick.round}:${pick.original_owner || "any"}`,
+        valueAssetId: buildPickValueAssetId(pick, pickBucket),
+        valueBucket: pickBucket,
+        name: formatPickName(pick, { userById, rosterById, previousFinishLookup, pickBucket }),
+        assetType: "pick",
+        raw: {
+          ...pick,
+          ktcBucket: pickBucket,
+          previousFinishLabel: finishInfo?.label || null,
+        },
+      };
+    });
 
     return {
       rosterId: roster.roster_id,
@@ -2539,20 +2677,70 @@ function buildPreviousFinishLookup(previousLeague, previousRosters = []) {
     .map((roster) => ({
       rosterId: String(roster.roster_id),
       ownerId: roster.owner_id != null ? String(roster.owner_id) : null,
+      explicitRank: extractRosterFinishRank(roster),
+      wins: Number(roster?.settings?.wins || 0),
+      losses: Number(roster?.settings?.losses || 0),
+      ties: Number(roster?.settings?.ties || 0),
       points: extractRosterPoints(roster),
     }))
-    .filter((entry) => Number.isFinite(entry.points))
-    .sort((a, b) => b.points - a.points || Number(a.rosterId) - Number(b.rosterId));
+    .sort((a, b) => {
+      if (Number.isFinite(a.explicitRank) && Number.isFinite(b.explicitRank)) return a.explicitRank - b.explicitRank;
+      if (Number.isFinite(a.explicitRank)) return -1;
+      if (Number.isFinite(b.explicitRank)) return 1;
+      return b.wins - a.wins
+        || a.losses - b.losses
+        || b.ties - a.ties
+        || (b.points || 0) - (a.points || 0)
+        || Number(a.rosterId) - Number(b.rosterId);
+    });
 
   const byRosterId = new Map();
   const byUserId = new Map();
+  const totalTeams = ranked.length;
   ranked.forEach((entry, index) => {
-    const label = `${ordinal(index + 1)} in ${season} PF`;
-    byRosterId.set(entry.rosterId, label);
-    if (entry.ownerId) byUserId.set(entry.ownerId, label);
+    const finishRank = Number.isFinite(entry.explicitRank) ? entry.explicitRank : index + 1;
+    const bucket = determineFirstRoundBucket(finishRank, totalTeams);
+    const tierLabel = describeFinishTier(finishRank, totalTeams);
+    const info = {
+      rank: finishRank,
+      season,
+      totalTeams,
+      bucket,
+      tierLabel,
+      label: `${tierLabel} in ${season}`,
+    };
+    byRosterId.set(entry.rosterId, info);
+    if (entry.ownerId) byUserId.set(entry.ownerId, info);
   });
 
   return { byRosterId, byUserId };
+}
+
+function extractRosterFinishRank(roster) {
+  const settings = roster?.settings || {};
+  const candidates = [settings.rank, settings.final_rank, settings.standings_rank];
+  for (const candidate of candidates) {
+    const numeric = Number(candidate);
+    if (Number.isFinite(numeric) && numeric > 0) return numeric;
+  }
+  return null;
+}
+
+function determineFirstRoundBucket(finishRank, totalTeams) {
+  if (!Number.isFinite(finishRank) || !Number.isFinite(totalTeams) || totalTeams <= 0) return "any";
+  const tierSize = Math.max(1, Math.floor(totalTeams / 3));
+  if (finishRank <= tierSize) return "late";
+  if (finishRank > totalTeams - tierSize) return "early";
+  return "mid";
+}
+
+function describeFinishTier(finishRank, totalTeams) {
+  if (!Number.isFinite(finishRank) || !Number.isFinite(totalTeams) || totalTeams <= 0) return "previous finish";
+  const tierSize = Math.max(1, Math.floor(totalTeams / 3));
+  const middleSize = Math.max(1, totalTeams - tierSize * 2);
+  if (finishRank <= tierSize) return `top ${tierSize}`;
+  if (finishRank > totalTeams - tierSize) return `bottom ${tierSize}`;
+  return `middle ${middleSize}`;
 }
 
 function resolvePickOwnerName(originalOwner, rosterById, userById) {
@@ -2570,7 +2758,7 @@ function resolvePickOwnerName(originalOwner, rosterById, userById) {
   return null;
 }
 
-function resolvePreviousFinishLabel(originalOwner, rosterById, previousFinishLookup) {
+function resolvePreviousFinishInfo(originalOwner, rosterById, previousFinishLookup) {
   if (originalOwner == null) return null;
 
   const ownerKey = String(originalOwner);
@@ -2588,7 +2776,16 @@ function resolvePreviousFinishLabel(originalOwner, rosterById, previousFinishLoo
   return null;
 }
 
-function formatPickName(pick, { userById, rosterById, previousFinishLookup }) {
+function resolvePreviousFinishLabel(originalOwner, rosterById, previousFinishLookup) {
+  return resolvePreviousFinishInfo(originalOwner, rosterById, previousFinishLookup)?.label || null;
+}
+
+function buildPickValueAssetId(pick, pickBucket = "any") {
+  const bucket = Number(pick?.round) === 1 ? normalizePickBucket(pickBucket) : "any";
+  return `pick:${pick.season}:r${pick.round}:${bucket}`;
+}
+
+function formatPickName(pick, { userById, rosterById, previousFinishLookup, pickBucket = "any" }) {
   const details = [];
   const ownerName = resolvePickOwnerName(pick.original_owner, rosterById, userById);
   if (ownerName) details.push(`from ${ownerName}`);
@@ -2597,7 +2794,10 @@ function formatPickName(pick, { userById, rosterById, previousFinishLookup }) {
   if (finishLabel) details.push(finishLabel);
 
   const suffix = details.length ? ` (${details.join(", ")})` : "";
-  return `${pick.season} Round ${pick.round} Pick${suffix}`;
+  const bucketLabel = Number(pick.round) === 1 && normalizePickBucket(pickBucket) !== "any"
+    ? ` ${formatPickBucketLabel(pickBucket)}`
+    : "";
+  return `${pick.season}${bucketLabel} ${ordinal(Number(pick.round) || 1)}${suffix}`;
 }
 
 async function loadValues(optionalUrl) {
