@@ -2,6 +2,7 @@ const API_BASE = "https://api.sleeper.app/v1";
 const SAMPLE_VALUES_PATH = "./data/ktc_values_sample.csv";
 const PLAYERS_CACHE_KEY = "fda_players_nfl_cache_v1";
 const PLAYERS_CACHE_TTL_MS = 1000 * 60 * 60 * 24;
+const DEFAULT_FAIRNESS_PCT = 20;
 const KTC_RAW_BASE = 0.10;
 const KTC_RAW_ELITE_WEIGHT = 0.04;
 const KTC_RAW_TRADE_WEIGHT = 0.09;
@@ -63,6 +64,7 @@ const el = {
   marketSection: document.querySelector("#market-section"),
   positionPremiumSelect: document.querySelector("#position-premium-select"),
   tradeVibeSelect: document.querySelector("#trade-vibe-select"),
+  teamStateSelect: document.querySelector("#team-state-select"),
   pickPremiumToggle: document.querySelector("#pick-premium-toggle"),
   youthPremiumToggle: document.querySelector("#youth-premium-toggle"),
   depthPremiumToggle: document.querySelector("#depth-premium-toggle"),
@@ -106,17 +108,8 @@ el.clearSelectedAssetsBtn?.addEventListener("click", clearSelectedOutgoingAssets
 [
   el.positionPremiumSelect,
   el.tradeVibeSelect,
-  el.pickPremiumToggle,
-  el.youthPremiumToggle,
-  el.depthPremiumToggle,
-  el.protectCoreToggle,
-  el.protectFirstsToggle,
-  el.preferConsolidationToggle,
-  el.swingBigToggle,
-  el.fairnessInput,
+  el.teamStateSelect,
   el.maxResultsInput,
-  el.ktcUrlInput,
-  el.allowExtraTargetAssetsInput,
 ].forEach((input) => {
   input?.addEventListener("change", () => {
     invalidateResults();
@@ -145,10 +138,6 @@ function invalidateResults() {
 function renderSessionSnapshot() {
   const meRosterId = Number(el.meSelect?.value || state.meRosterId);
   const meRoster = state.normalizedRosters.find((roster) => roster.rosterId === meRosterId) || null;
-  const allowedTypes = [
-    state.outgoingFilters.players ? "players" : null,
-    state.outgoingFilters.picks ? "picks" : null,
-  ].filter(Boolean).join(" + ");
 
   if (el.snapshotLeague) {
     el.snapshotLeague.textContent = state.leagueName || "Waiting for load";
@@ -161,11 +150,11 @@ function renderSessionSnapshot() {
   }
   if (el.snapshotPool) {
     if (state.selectedOutgoingAssetIds.size > 0) {
-      el.snapshotPool.textContent = `${state.selectedOutgoingAssetIds.size} asset${state.selectedOutgoingAssetIds.size === 1 ? "" : "s"} selected`;
+      el.snapshotPool.textContent = `${state.selectedOutgoingAssetIds.size} piece${state.selectedOutgoingAssetIds.size === 1 ? "" : "s"} selected`;
     } else if (state.leagueName) {
-      el.snapshotPool.textContent = `Flexible ${allowedTypes}`;
+      el.snapshotPool.textContent = "Builder picks the package";
     } else {
-      el.snapshotPool.textContent = "Players + picks";
+      el.snapshotPool.textContent = "Optional shortlist";
     }
   }
 }
@@ -506,7 +495,7 @@ function renderPlayerSearch() {
   el.playerResults.innerHTML = "";
 
   if (candidates.length === 0) {
-    el.playerResults.innerHTML = `<div class="player-item muted">No matching assets found on other rosters.</div>`;
+    el.playerResults.innerHTML = `<div class="player-item muted">No matching players found on other rosters.</div>`;
     if (snapshotNeedsRefresh) renderSessionSnapshot();
     return;
   }
@@ -618,7 +607,7 @@ function renderOutgoingAssetSearch() {
     row.className = `player-item ${selected ? "selected" : ""}`;
     row.innerHTML = buildAssetPickerMarkup(asset, {
       values: state.values,
-      contextLabel: selected ? "Selected for trade pool" : "Tap to include in trade pool",
+      contextLabel: selected ? "Selected to give up" : "Tap to include as a give-up piece",
       emphasisTags: getProtectionTags(asset, meRoster, state.values),
     });
     row.addEventListener("click", () => toggleOutgoingAsset(asset.assetId));
@@ -631,22 +620,13 @@ function renderOutgoingAssetSearch() {
 function updateSelectedAssetsSummary() {
   if (!el.selectedAssetsSummary) return;
 
-  const protectedNotes = [];
-  if (el.protectCoreToggle?.checked) protectedNotes.push("core protection on");
-  if (el.protectFirstsToggle?.checked) protectedNotes.push("1st-round protection on");
-  const suffix = protectedNotes.length ? ` (${protectedNotes.join(", ")})` : "";
-
   if (state.selectedOutgoingAssetIds.size > 0) {
-    el.selectedAssetsSummary.textContent = `${state.selectedOutgoingAssetIds.size} exact asset${state.selectedOutgoingAssetIds.size === 1 ? "" : "s"} selected. The lab will only use these pieces${suffix}.`;
+    el.selectedAssetsSummary.textContent = `${state.selectedOutgoingAssetIds.size} exact piece${state.selectedOutgoingAssetIds.size === 1 ? "" : "s"} selected. Trade ideas will only use these assets.`;
     renderSessionSnapshot();
     return;
   }
 
-  const allowedTypes = [
-    state.outgoingFilters.players ? "players" : null,
-    state.outgoingFilters.picks ? "picks" : null,
-  ].filter(Boolean).join(" + ");
-  el.selectedAssetsSummary.textContent = `No exact assets selected yet. The lab can use any allowed ${allowedTypes}${suffix}.`;
+  el.selectedAssetsSummary.textContent = "Optional. Leave this blank and the builder can use players or picks while avoiding your highest-value core pieces.";
   renderSessionSnapshot();
 }
 
@@ -681,11 +661,11 @@ function buildAssetPickerMarkup(asset, { values, contextLabel, emphasisTags = []
 
 function getProtectionTags(asset, myRoster, values) {
   const tags = [];
-  if (el.protectCoreToggle?.checked && getCoreAssetIdSet(myRoster, values).has(asset.assetId)) {
+  if (getCoreAssetIdSet(myRoster, values).has(asset.assetId)) {
     tags.push("Core piece");
   }
-  if (el.protectFirstsToggle?.checked && isFirstRoundPick(asset)) {
-    tags.push("Protected 1st");
+  if (isFirstRoundPick(asset)) {
+    tags.push("1st-round pick");
   }
   return tags;
 }
@@ -707,44 +687,70 @@ async function generateTradeIdeas() {
     return;
   }
 
-  const fairnessPct = Number(el.fairnessInput.value || 20);
-  const maxResults = Number(el.maxResultsInput.value || 4);
-  const allowExtraTargetAssets = Boolean(el.allowExtraTargetAssetsInput?.checked);
+  const fairnessPct = DEFAULT_FAIRNESS_PCT;
+  const maxResults = clamp(Number(el.maxResultsInput?.value || 3), 1, 6);
   const tradeLab = getTradeLabSettings();
 
   try {
     setButtonLoading(el.generateBtn, true, "Building trade ideas...");
-    state.values = await loadValues(el.ktcUrlInput.value.trim());
+    state.values = await loadValues(el.ktcUrlInput?.value?.trim() || "");
     renderPlayerSearch();
     renderOutgoingAssetSearch();
 
-    const ideas = suggestTrades({
+    const directIdeas = suggestTrades({
       myRoster: meRoster,
       theirRoster,
       targetAsset: state.targetAsset,
       values: state.values,
       fairnessPct,
       maxResults,
-      allowExtraTargetAssets,
+      allowExtraTargetAssets: false,
+      requireExtraTargetAsset: false,
       tradeLab,
     });
+    const throwInIdeas = suggestTrades({
+      myRoster: meRoster,
+      theirRoster,
+      targetAsset: state.targetAsset,
+      values: state.values,
+      fairnessPct,
+      maxResults,
+      allowExtraTargetAssets: true,
+      requireExtraTargetAsset: true,
+      tradeLab,
+    });
+    const totalIdeaCount = directIdeas.length + throwInIdeas.length;
 
     el.resultsSection.classList.remove("hidden");
     el.resultsSubtitle.textContent = buildResultsSubtitle({
       meRoster,
       theirRoster,
       targetAsset: state.targetAsset,
-      fairnessPct,
       tradeLab,
     });
 
-    if (ideas.length === 0) {
+    if (totalIdeaCount === 0) {
       el.resultsList.innerHTML = `<p class="muted">${buildNoIdeasMessage(tradeLab)}</p>`;
       el.resultsSection.scrollIntoView({ behavior: "smooth", block: "start" });
       return;
     }
 
-    el.resultsList.innerHTML = ideas.map((idea, idx) => renderTradeCard(idea, idx, state.values)).join("");
+    el.resultsList.innerHTML = [
+      renderTradeIdeaGroup({
+        title: "Direct ideas",
+        subtitle: `Straight-up offers for ${state.targetAsset.name} only.`,
+        emptyText: "No direct offers survived the value and roster-fit checks.",
+        ideas: directIdeas,
+        values: state.values,
+      }),
+      renderTradeIdeaGroup({
+        title: "Throw-in-back ideas",
+        subtitle: `${state.targetAsset.name} plus one smaller piece from their side.`,
+        emptyText: "No clean throw-in-back variations fit the current setup.",
+        ideas: throwInIdeas,
+        values: state.values,
+      }),
+    ].join("");
     el.resultsSection.scrollIntoView({ behavior: "smooth", block: "start" });
   } catch (err) {
     alert(`Could not load valuation source. ${err.message}`);
@@ -755,44 +761,48 @@ async function generateTradeIdeas() {
 
 function getTradeLabSettings() {
   return {
-    allowPlayers: state.outgoingFilters.players,
-    allowPicks: state.outgoingFilters.picks,
+    allowPlayers: true,
+    allowPicks: true,
     selectedOutgoingAssetIds: new Set(state.selectedOutgoingAssetIds),
     positionPremium: el.positionPremiumSelect?.value || "none",
     tradeVibe: el.tradeVibeSelect?.value || "balanced",
-    pickPremium: Boolean(el.pickPremiumToggle?.checked),
-    youthPremium: Boolean(el.youthPremiumToggle?.checked),
-    depthPremium: Boolean(el.depthPremiumToggle?.checked),
-    protectCore: Boolean(el.protectCoreToggle?.checked),
-    protectFirsts: Boolean(el.protectFirstsToggle?.checked),
-    preferConsolidation: Boolean(el.preferConsolidationToggle?.checked),
-    swingBig: Boolean(el.swingBigToggle?.checked),
+    teamState: el.teamStateSelect?.value || "middle",
   };
 }
 
-function buildResultsSubtitle({ meRoster, theirRoster, targetAsset, fairnessPct, tradeLab }) {
+function buildResultsSubtitle({ meRoster, theirRoster, targetAsset, tradeLab }) {
   const notes = [];
-  const outgoingMode = [
-    tradeLab.allowPlayers ? "players" : null,
-    tradeLab.allowPicks ? "picks" : null,
-  ].filter(Boolean).join(" + ");
-  notes.push(`sending ${outgoingMode}`);
-  notes.push(`fairness ${getEffectiveFairnessPct(fairnessPct, tradeLab.tradeVibe)}%`);
-  if (tradeLab.pickPremium) notes.push("pick fever");
+  notes.push(`${getTeamStateLabel(tradeLab.teamState)} lens`);
+  notes.push(`${tradeLab.tradeVibe} room`);
   if (tradeLab.positionPremium !== "none") notes.push(`${tradeLab.positionPremium} premium`);
   if (tradeLab.selectedOutgoingAssetIds.size > 0) {
-    notes.push(`${tradeLab.selectedOutgoingAssetIds.size} hand-picked outgoing asset${tradeLab.selectedOutgoingAssetIds.size === 1 ? "" : "s"}`);
+    notes.push(`${tradeLab.selectedOutgoingAssetIds.size} hand-picked give-up piece${tradeLab.selectedOutgoingAssetIds.size === 1 ? "" : "s"}`);
   }
-  return `${meRoster.manager.displayName} building for ${targetAsset.name} from ${theirRoster.manager.displayName} • ${notes.join(" • ")}`;
+  return `${meRoster.manager.displayName} targeting ${targetAsset.name} from ${theirRoster.manager.displayName} • ${notes.join(" • ")}`;
 }
 
 function buildNoIdeasMessage(tradeLab) {
   const advice = [];
-  if (tradeLab.selectedOutgoingAssetIds.size > 0) advice.push("expand your outgoing pool");
-  if (tradeLab.protectCore || tradeLab.protectFirsts) advice.push("relax one of the protection toggles");
-  advice.push("increase fairness %");
+  if (tradeLab.selectedOutgoingAssetIds.size > 0) advice.push("leave the give-up list blank or include more pieces");
   advice.push("change the target");
-  return `No offers survived both the fairness check and the Trade Lab rules. Try to ${advice.join(", ")}.`;
+  advice.push("try a different team-state lens");
+  return `No trade ideas cleared the value and fit checks. Try to ${advice.join(", ")}.`;
+}
+
+function renderTradeIdeaGroup({ title, subtitle, emptyText, ideas, values }) {
+  return `
+    <section class="idea-group">
+      <div class="idea-group-heading">
+        <h3>${title}</h3>
+        <p class="muted small">${subtitle}</p>
+      </div>
+      ${
+        ideas.length > 0
+          ? ideas.map((idea, idx) => renderTradeCard(idea, idx, values)).join("")
+          : `<p class="muted small idea-group-empty">${emptyText}</p>`
+      }
+    </section>
+  `;
 }
 
 function renderTradeCard(idea, index, values) {
@@ -801,6 +811,7 @@ function renderTradeCard(idea, index, values) {
       <div class="trade-card-header">
         <div>
           <h3>Idea ${index + 1}</h3>
+          <p class="trade-style-label">${idea.styleLabel}</p>
           <p class="muted small">${idea.summary}</p>
         </div>
         <span class="trade-score">Trade Lab ${idea.labScore}</span>
@@ -841,7 +852,17 @@ function renderTradeCard(idea, index, values) {
   `;
 }
 
-function suggestTrades({ myRoster, theirRoster, targetAsset, values, fairnessPct, maxResults, allowExtraTargetAssets, tradeLab }) {
+function suggestTrades({
+  myRoster,
+  theirRoster,
+  targetAsset,
+  values,
+  fairnessPct,
+  maxResults,
+  allowExtraTargetAssets,
+  requireExtraTargetAsset = false,
+  tradeLab,
+}) {
   const targetValue = getAssetValue(targetAsset, values);
   if (!Number.isFinite(targetValue)) return [];
 
@@ -850,14 +871,11 @@ function suggestTrades({ myRoster, theirRoster, targetAsset, values, fairnessPct
 
   const globalMaxValue = getGlobalMaxPlayerValue(values, targetValue);
   const myPackages = buildPackages(myAssetPool, values, 3);
-  const theirPackages = buildTargetPackages({
-    theirRoster,
-    targetAsset,
-    values,
-    allowExtraTargetAssets,
-    maxExtraAssets: 2,
-  });
+  const theirPackages = buildTargetPackages({ theirRoster, targetAsset, values, allowExtraTargetAssets, maxExtraAssets: 1 }).filter(
+    (pkg) => (requireExtraTargetAsset ? pkg.assets.length > 1 : pkg.assets.length === 1)
+  );
   const effectiveFairnessPct = getEffectiveFairnessPct(fairnessPct, tradeLab.tradeVibe);
+  const ideaStyle = requireExtraTargetAsset ? "throw-in-back" : "direct";
 
   const rawIdeas = [];
   for (const myPackage of myPackages) {
@@ -878,7 +896,7 @@ function suggestTrades({ myRoster, theirRoster, targetAsset, values, fairnessPct
           values,
           pctDiff,
           tradeLab,
-          allowExtraTargetAssets,
+          ideaStyle,
         });
 
         rawIdeas.push({
@@ -886,6 +904,7 @@ function suggestTrades({ myRoster, theirRoster, targetAsset, values, fairnessPct
           theirAssets: theirPackage.assets,
           ...packageResult,
           pctDiff: Number(pctDiff.toFixed(2)),
+          styleLabel: ideaStyle === "throw-in-back" ? "Throw-in back" : "Direct",
           ...labDetails,
         });
       }
@@ -915,13 +934,17 @@ function resolveOutgoingAssetPool({ myRoster, values, tradeLab }) {
     return pool.filter((asset) => tradeLab.selectedOutgoingAssetIds.has(asset.assetId));
   }
 
-  if (tradeLab.protectCore) {
-    const coreAssetIds = getCoreAssetIdSet(myRoster, values);
-    pool = pool.filter((asset) => !coreAssetIds.has(asset.assetId));
+  const coreAssetIds = getCoreAssetIdSet(myRoster, values);
+  const nonCorePool = pool.filter((asset) => !coreAssetIds.has(asset.assetId));
+  if (nonCorePool.length >= 3) {
+    pool = nonCorePool;
   }
 
-  if (tradeLab.protectFirsts) {
-    pool = pool.filter((asset) => !isFirstRoundPick(asset));
+  if (tradeLab.teamState === "rebuilding") {
+    const nonPremiumFuture = pool.filter((asset) => !isFirstRoundPick(asset));
+    if (nonPremiumFuture.length >= 3) {
+      pool = nonPremiumFuture;
+    }
   }
 
   return pool;
@@ -936,32 +959,24 @@ function getEffectiveFairnessPct(fairnessPct, tradeVibe) {
   return fairnessPct + (vibeBuffer[tradeVibe] || 0);
 }
 
-function scoreTradeIdea({ myRoster, theirRoster, targetAsset, myAssets, theirAssets, values, pctDiff, tradeLab, allowExtraTargetAssets }) {
+function scoreTradeIdea({ myRoster, theirRoster, targetAsset, myAssets, theirAssets, values, pctDiff, tradeLab, ideaStyle }) {
   const marketMyValue = calculatePerceivedPackageValue(myAssets, values, tradeLab);
   const marketTheirValue = calculatePerceivedPackageValue(theirAssets, values, tradeLab);
   const marketDelta = marketMyValue - marketTheirValue;
   const coreAssetIds = getCoreAssetIdSet(myRoster, values);
   const exposesCore = myAssets.some((asset) => coreAssetIds.has(asset.assetId));
-  const spendsProtectedFirst = myAssets.some((asset) => isFirstRoundPick(asset));
 
   let labScore = 82;
   labScore -= pctDiff * (tradeLab.tradeVibe === "chaos" ? 0.55 : tradeLab.tradeVibe === "aggressive" ? 0.8 : 1.1);
   labScore += Math.max(-18, Math.min(18, marketDelta / 240));
 
-  if (tradeLab.pickPremium && myAssets.some((asset) => asset.assetType === "pick")) labScore += 6;
-  if (tradeLab.depthPremium && myAssets.length >= 2) labScore += 7;
-  if (tradeLab.preferConsolidation) {
-    if (myAssets.length > theirAssets.length) labScore += 11;
-    if (myAssets.length < theirAssets.length) labScore -= 5;
-  }
-  if (tradeLab.protectCore) labScore += exposesCore ? -16 : 9;
-  if (tradeLab.protectFirsts) labScore += spendsProtectedFirst ? -11 : 6;
   if (tradeLab.positionPremium !== "none" && myAssets.some((asset) => playerPositionForAsset(asset) === tradeLab.positionPremium)) {
     labScore += 6;
   }
-  if (tradeLab.youthPremium && myAssets.some(isYouthAsset)) labScore += 5;
-  if (tradeLab.swingBig) labScore += getCeilingBonus(targetAsset, theirAssets);
-  if (allowExtraTargetAssets && theirAssets.length > 1) labScore += 5;
+  if (ideaStyle === "throw-in-back" && theirAssets.length > 1) labScore += 4;
+  if (!exposesCore) labScore += 8;
+  if (exposesCore) labScore -= 16;
+  labScore += getTeamStateScoreAdjustment({ targetAsset, myAssets, theirAssets, tradeLab });
   if (tradeLab.tradeVibe === "aggressive") labScore += 3;
   if (tradeLab.tradeVibe === "chaos") labScore += 6;
 
@@ -975,8 +990,7 @@ function scoreTradeIdea({ myRoster, theirRoster, targetAsset, myAssets, theirAss
     tradeLab,
     marketDelta,
     exposesCore,
-    spendsProtectedFirst,
-    allowExtraTargetAssets,
+    ideaStyle,
   });
 
   return {
@@ -1010,8 +1024,10 @@ function calculatePerceivedPackageValue(assets, values, tradeLab) {
   const total = assets.reduce((sum, asset) => sum + getPerceivedAssetValue(asset, values, tradeLab), 0);
   let packageBonus = 0;
 
-  if (tradeLab.depthPremium && assets.length >= 2) {
-    packageBonus += 120 * (assets.length - 1);
+  if (assets.length >= 2) {
+    if (tradeLab.tradeVibe === "aggressive") packageBonus += 70 * (assets.length - 1);
+    if (tradeLab.tradeVibe === "chaos") packageBonus += 120 * (assets.length - 1);
+    if (tradeLab.teamState === "contending") packageBonus += 40 * (assets.length - 1);
   }
 
   return Math.round(total + packageBonus);
@@ -1021,12 +1037,15 @@ function getPerceivedAssetValue(asset, values, tradeLab) {
   const baseValue = getAssetValue(asset, values);
   let multiplier = 1;
 
-  if (tradeLab.pickPremium && asset.assetType === "pick") multiplier += 0.12;
   if (tradeLab.positionPremium !== "none" && playerPositionForAsset(asset) === tradeLab.positionPremium) multiplier += 0.1;
-  if (tradeLab.youthPremium && asset.assetType === "player") {
-    const age = playerAgeForAsset(asset);
-    if (Number.isFinite(age) && age <= 24) multiplier += 0.08;
-    if (Number.isFinite(age) && age >= 29) multiplier -= 0.05;
+  if (tradeLab.teamState === "rebuilding") {
+    if (asset.assetType === "pick") multiplier += 0.09;
+    if (isYouthAsset(asset)) multiplier += 0.08;
+    if (isVeteranAsset(asset)) multiplier -= 0.06;
+  }
+  if (tradeLab.teamState === "contending") {
+    if (asset.assetType === "pick") multiplier -= 0.04;
+    if (isVeteranAsset(asset) || isWinNowTarget(asset)) multiplier += 0.07;
   }
 
   return Math.round(baseValue * multiplier);
@@ -1042,44 +1061,42 @@ function buildTradeReasoning({
   tradeLab,
   marketDelta,
   exposesCore,
-  spendsProtectedFirst,
-  allowExtraTargetAssets,
+  ideaStyle,
 }) {
   const tags = [];
   const notes = [];
 
-  if (tradeLab.pickPremium && myAssets.some((asset) => asset.assetType === "pick")) {
-    tags.push("Pick Fever");
-    notes.push("your outgoing picks should feel richer in this room");
-  }
   if (tradeLab.positionPremium !== "none" && myAssets.some((asset) => playerPositionForAsset(asset) === tradeLab.positionPremium)) {
     tags.push(`${tradeLab.positionPremium} Premium`);
     notes.push(`${tradeLab.positionPremium.toLowerCase()} liquidity is doing part of the work here`);
   }
-  if (tradeLab.depthPremium && myAssets.length > theirAssets.length) {
-    tags.push("Depth Deal");
-    notes.push("this sells as one asset turning into multiple usable pieces");
-  }
-  if (tradeLab.preferConsolidation && myAssets.length > theirAssets.length) {
-    tags.push("Consolidation");
-  }
-  if (tradeLab.protectCore && !exposesCore) {
+  if (!exposesCore) {
     tags.push("Core Intact");
     notes.push("you are not cutting into the spine of your roster");
   }
-  if (tradeLab.protectFirsts && !spendsProtectedFirst) {
-    tags.push("Firsts Safe");
+  if (tradeLab.teamState === "rebuilding") {
+    tags.push("Rebuild Lens");
+    if (isRebuildFriendlyTarget(targetAsset)) {
+      notes.push(`the return keeps your timeline younger around ${targetAsset.name}`);
+    }
+    if (myAssets.some(isVeteranAsset)) {
+      notes.push("you are cashing out win-now value instead of shipping your youngest insulation");
+    }
   }
-  if (tradeLab.youthPremium && myAssets.some(isYouthAsset)) {
-    tags.push("Youth Bait");
+  if (tradeLab.teamState === "middle") {
+    tags.push("Flexible Build");
+    notes.push("the package stays balanced enough for a team that is not fully all-in or tearing it down");
   }
-  if (tradeLab.swingBig && getCeilingBonus(targetAsset, theirAssets) > 0) {
-    tags.push("Ceiling Swing");
-    notes.push(`you are paying for ${targetAsset.name} without turning it into a pure panic overpay`);
+  if (tradeLab.teamState === "contending") {
+    tags.push("Win-Now Push");
+    notes.push(`this consolidates value into a player you actually want in your lineup now`);
+    if (myAssets.length > theirAssets.length) {
+      tags.push("Consolidation");
+    }
   }
-  if (allowExtraTargetAssets && theirAssets.length > 1) {
-    tags.push("Sweetener Back");
-    notes.push("the extra piece keeps the offer from feeling like a blind reach");
+  if (ideaStyle === "throw-in-back" && theirAssets.length > 1) {
+    tags.push("Throw-In Back");
+    notes.push("the extra piece back keeps the offer from feeling too one-sided");
   }
   if (marketDelta >= 250) {
     tags.push("Market Leverage");
@@ -1091,14 +1108,14 @@ function buildTradeReasoning({
 
   const summary = notes.slice(0, 2).join(". ").replace(/\.$/, "") || "clean starter package with enough market logic to open the conversation";
 
-  let pitch = `Open with: “I’m trying to get to ${targetAsset.name} without wasting your time. This gives you ${myAssets.length > 1 ? `${myAssets.length} pieces of usable value` : "real value"} and keeps the deal close to market.”`;
-  if (tradeLab.pickPremium && myAssets.some((asset) => asset.assetType === "pick")) {
-    pitch = `Open with: “If your room still loves future capital, this gives ${theirRoster.manager.displayName} more draft insulation while I pay up for ${targetAsset.name}.”`;
-  } else if (tradeLab.depthPremium && myAssets.length > theirAssets.length) {
-    pitch = `Open with: “This lets ${theirRoster.manager.displayName} turn one chip into ${myAssets.length} usable pieces without getting crushed on value.”`;
-  } else if (tradeLab.positionPremium !== "none" && myAssets.some((asset) => playerPositionForAsset(asset) === tradeLab.positionPremium)) {
+  let pitch = `Open with: “I’m trying to get to ${targetAsset.name} without wasting your time. This gives you ${myAssets.length > 1 ? `${myAssets.length} usable pieces` : "real value"} and keeps it close to market.”`;
+  if (tradeLab.positionPremium !== "none" && myAssets.some((asset) => playerPositionForAsset(asset) === tradeLab.positionPremium)) {
     pitch = `Open with: “I know ${tradeLab.positionPremium}s carry extra juice in this league, so I built this around that premium instead of random filler.”`;
-  } else if (allowExtraTargetAssets && theirAssets.length > 1) {
+  } else if (tradeLab.teamState === "rebuilding") {
+    pitch = `Open with: “I’m willing to move some win-now value, but I want the return to make sense for a younger timeline around ${targetAsset.name}.”`;
+  } else if (tradeLab.teamState === "contending") {
+    pitch = `Open with: “I’m trying to turn extra depth and future insulation into a starter I can actually use, and this keeps the value honest.”`;
+  } else if (ideaStyle === "throw-in-back" && theirAssets.length > 1) {
     pitch = `Open with: “I’m good paying for ${targetAsset.name}, but I’d want the small add-on back so the deal lands closer to neutral for both sides.”`;
   }
 
@@ -1109,18 +1126,65 @@ function buildTradeReasoning({
   };
 }
 
-function getCeilingBonus(targetAsset, receivedAssets) {
-  let bonus = 0;
-  const targetAge = playerAgeForAsset(targetAsset);
-  const targetPosition = playerPositionForAsset(targetAsset);
+function getTeamStateLabel(teamState) {
+  return {
+    rebuilding: "Rebuilding",
+    middle: "Middle",
+    contending: "Contending",
+  }[teamState] || "Middle";
+}
 
-  if (targetAsset.assetType === "player") {
-    if (Number.isFinite(targetAge) && targetAge <= 25) bonus += 4;
-    if (targetPosition === "QB" || targetPosition === "WR") bonus += 3;
+function getTeamStateScoreAdjustment({ targetAsset, myAssets, theirAssets, tradeLab }) {
+  if (tradeLab.teamState === "rebuilding") {
+    let score = 0;
+    if (isRebuildFriendlyTarget(targetAsset)) score += 10;
+    if (theirAssets.length > 1) score += 3;
+    if (myAssets.some(isVeteranAsset)) score += 6;
+    if (myAssets.some((asset) => isFirstRoundPick(asset) || isYouthAsset(asset))) score -= 8;
+    return score;
   }
 
-  if (receivedAssets.length === 1) bonus += 2;
-  return bonus;
+  if (tradeLab.teamState === "contending") {
+    let score = 0;
+    if (isWinNowTarget(targetAsset)) score += 10;
+    if (myAssets.length > theirAssets.length) score += 5;
+    if (myAssets.some((asset) => isFirstRoundPick(asset) || isYouthAsset(asset))) score += 5;
+    return score;
+  }
+
+  let score = 0;
+  const targetAge = playerAgeForAsset(targetAsset);
+  if (Number.isFinite(targetAge) && targetAge >= 23 && targetAge <= 27) score += 4;
+  if (myAssets.length <= 2) score += 3;
+  return score;
+}
+
+function isVeteranAsset(asset) {
+  if (asset.assetType !== "player") return false;
+  const age = playerAgeForAsset(asset);
+  const position = playerPositionForAsset(asset);
+  if (!Number.isFinite(age)) return false;
+  if (position === "RB") return age >= 26;
+  return age >= 28;
+}
+
+function isRebuildFriendlyTarget(asset) {
+  if (asset.assetType !== "player") return false;
+  const age = playerAgeForAsset(asset);
+  const position = playerPositionForAsset(asset);
+  if (!Number.isFinite(age)) return position === "QB" || position === "WR";
+  if (position === "QB" || position === "WR") return age <= 27;
+  return age <= 25;
+}
+
+function isWinNowTarget(asset) {
+  if (asset.assetType !== "player") return false;
+  const age = playerAgeForAsset(asset);
+  const position = playerPositionForAsset(asset);
+  if (!Number.isFinite(age)) return position === "RB" || position === "TE";
+  if (position === "RB") return age <= 27;
+  if (position === "TE") return age <= 29;
+  return age <= 30;
 }
 
 function clamp(value, min, max) {
@@ -1265,10 +1329,12 @@ function buildTargetPackages({ theirRoster, targetAsset, values, allowExtraTarge
   const packages = [{ assets: [targetAsset], values: [targetValue] }];
   if (!allowExtraTargetAssets) return packages;
 
+  const maxThrowInValue = Math.max(900, Math.round(targetValue * 0.3));
   const extras = theirRoster.assets
     .filter((asset) => asset.assetId !== targetAsset.assetId)
     .map((asset) => ({ asset, value: getAssetValue(asset, values) }))
-    .filter((entry) => Number.isFinite(entry.value));
+    .filter((entry) => Number.isFinite(entry.value) && entry.value <= maxThrowInValue)
+    .sort((a, b) => a.value - b.value);
 
   for (let size = 1; size <= Math.min(maxExtraAssets, extras.length); size++) {
     for (const combo of combinationsOfSize(extras, size)) {

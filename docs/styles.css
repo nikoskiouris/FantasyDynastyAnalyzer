@@ -689,6 +689,30 @@ button:disabled {
   gap: 0.95rem;
 }
 
+.idea-group {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.idea-group-heading h3,
+.idea-group-heading p {
+  margin: 0;
+}
+
+.idea-group-heading {
+  display: grid;
+  gap: 0.25rem;
+  padding: 0.2rem 0.1rem;
+}
+
+.idea-group-empty {
+  margin: 0;
+  padding: 0.95rem 1rem;
+  border: 1px dashed rgba(22, 36, 48, 0.12);
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.68);
+}
+
 .trade-card {
   border: 1px solid rgba(22, 36, 48, 0.08);
   border-radius: var(--radius-lg);
@@ -734,6 +758,15 @@ button:disabled {
   color: var(--accent-strong);
   font-size: 0.88rem;
   font-weight: 700;
+}
+
+.trade-style-label {
+  margin: 0 0 0.25rem;
+  color: var(--gold);
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .trade-tag-row {

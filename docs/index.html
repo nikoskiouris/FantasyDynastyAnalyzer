@@ -16,7 +16,7 @@
           <div class="hero-copy">
             <p class="eyebrow">Front Office Trade Studio</p>
             <h1>Fantasy Dynasty Analyzer</h1>
-            <p class="hero-lede">Connect your Sleeper league, read the room, and generate trade ideas that feel believable instead of spreadsheet-random.</p>
+            <p class="hero-lede">Connect your Sleeper league, pick your team, name your target, note anything you would move, and get trade ideas that actually fit your room.</p>
             <div class="hero-pill-row">
               <span class="hero-pill">Sleeper live data</span>
               <span class="hero-pill">Market-fit scoring</span>
@@ -35,16 +35,16 @@
                 <strong id="snapshot-league">Waiting for load</strong>
               </article>
               <article class="snapshot-card">
-                <span class="snapshot-label">Manager</span>
+                <span class="snapshot-label">You</span>
                 <strong id="snapshot-manager">Choose after load</strong>
               </article>
               <article class="snapshot-card">
-                <span class="snapshot-label">Target</span>
+                <span class="snapshot-label">Want</span>
                 <strong id="snapshot-target">No target yet</strong>
               </article>
               <article class="snapshot-card">
-                <span class="snapshot-label">Outgoing pool</span>
-                <strong id="snapshot-pool">Players + picks</strong>
+                <span class="snapshot-label">Give Up</span>
+                <strong id="snapshot-pool">Optional shortlist</strong>
               </article>
             </div>
           </aside>
@@ -53,9 +53,9 @@
         <section class="workflow-banner">
           <div>
             <p class="eyebrow">Workflow</p>
-            <h2>Load, shortlist, tune, send</h2>
+            <h2>Who you are, what you want, what you would move</h2>
           </div>
-          <p class="muted">The flow stays sequential, but the workspace is cleaned up to feel calmer, clearer, and easier to scan.</p>
+          <p class="muted">Load the league, choose your team, pick a target, optionally shortlist your give-up pieces, add league context, and generate ideas.</p>
         </section>
 
         <section class="card stage-card stage-lead">
@@ -100,23 +100,13 @@
           <div class="section-heading">
             <div class="section-kicker">
               <span class="step-badge">03</span>
-              <span class="eyebrow">Target Board</span>
+              <span class="eyebrow">Target</span>
             </div>
-            <h2>What are you chasing?</h2>
-            <p class="section-copy">Search another roster for a player, a pick, or both.</p>
+            <h2>Who do you want?</h2>
+            <p class="section-copy">Search another roster and pick the player you want to trade for.</p>
           </div>
-          <div class="chip-row">
-            <label class="chip-toggle" for="target-players-toggle">
-              <input id="target-players-toggle" type="checkbox" checked />
-              <span>Players</span>
-            </label>
-            <label class="chip-toggle" for="target-picks-toggle">
-              <input id="target-picks-toggle" type="checkbox" />
-              <span>Picks</span>
-            </label>
-          </div>
-          <label for="player-search">Search assets on another roster</label>
-          <input id="player-search" placeholder="Start typing a player name or pick..." />
+          <label for="player-search">Search players on other rosters</label>
+          <input id="player-search" placeholder="Start typing a player name..." />
           <div id="player-results" class="list"></div>
         </section>
 
@@ -124,28 +114,17 @@
           <div class="section-heading">
             <div class="section-kicker">
               <span class="step-badge">04</span>
-              <span class="eyebrow">Your Side</span>
+              <span class="eyebrow">Optional Give-Up</span>
             </div>
-            <h2>Build your side of the trade</h2>
-            <p class="section-copy">Set the pool you are actually willing to move, then let the builder work inside those guardrails.</p>
+            <h2>Anything you want to give up?</h2>
+            <p class="section-copy">Shortlist any players or picks you are open to moving. Leave this blank and the builder will avoid your top core pieces.</p>
           </div>
-          <div class="chip-row">
-            <label class="chip-toggle" for="give-players-toggle">
-              <input id="give-players-toggle" type="checkbox" checked />
-              <span>Players</span>
-            </label>
-            <label class="chip-toggle" for="give-picks-toggle">
-              <input id="give-picks-toggle" type="checkbox" checked />
-              <span>Picks</span>
-            </label>
-          </div>
-          <label for="my-asset-search">Optional: hand-pick assets you are open to moving</label>
+          <label for="my-asset-search">Optional: choose players or picks you are open to moving</label>
           <input id="my-asset-search" placeholder="Search your roster..." />
           <div class="builder-toolbar">
-            <button id="select-visible-assets-btn" type="button" class="secondary-btn">Select visible</button>
-            <button id="clear-selected-assets-btn" type="button" class="secondary-btn">Clear selected</button>
+            <button id="clear-selected-assets-btn" type="button" class="secondary-btn">Clear list</button>
           </div>
-          <p id="selected-assets-summary" class="selection-summary muted small">No exact assets selected yet. The lab can use any asset type you allow above.</p>
+          <p id="selected-assets-summary" class="selection-summary muted small">Optional. Leave this blank and the builder can use players or picks while protecting your top core pieces.</p>
           <div id="my-asset-results" class="list"></div>
         </section>
 
@@ -156,11 +135,11 @@
               <span class="eyebrow">League Mood</span>
             </div>
             <h2>Read your league room</h2>
-            <p class="section-copy">These settings do not just change the math. They shape which offers feel believable in your league.</p>
+            <p class="section-copy">Set the few things that actually change value in your league.</p>
           </div>
           <div class="grid">
             <label>
-              Position your league chases
+              Premium position
               <select id="position-premium-select">
                 <option value="none">No clear premium</option>
                 <option value="QB">Quarterbacks</option>
@@ -177,56 +156,13 @@
                 <option value="chaos">Chaos goblin</option>
               </select>
             </label>
-          </div>
-          <div class="toggle-grid">
-            <label class="toggle-card" for="pick-premium-toggle">
-              <input id="pick-premium-toggle" type="checkbox" />
-              <span>
-                <strong>Pick fever</strong>
-                <small>Your league treats draft picks like blue-chip crypto.</small>
-              </span>
-            </label>
-            <label class="toggle-card" for="youth-premium-toggle">
-              <input id="youth-premium-toggle" type="checkbox" />
-              <span>
-                <strong>Youth obsession</strong>
-                <small>Managers will overpay for age insulation and upside.</small>
-              </span>
-            </label>
-            <label class="toggle-card" for="depth-premium-toggle">
-              <input id="depth-premium-toggle" type="checkbox" />
-              <span>
-                <strong>Depth lovers</strong>
-                <small>Two-for-ones and starter bundles play well in your room.</small>
-              </span>
-            </label>
-            <label class="toggle-card" for="protect-core-toggle">
-              <input id="protect-core-toggle" type="checkbox" checked />
-              <span>
-                <strong>Protect my core</strong>
-                <small>Prefer offers that do not cut into your most valuable foundational pieces.</small>
-              </span>
-            </label>
-            <label class="toggle-card" for="protect-firsts-toggle">
-              <input id="protect-firsts-toggle" type="checkbox" />
-              <span>
-                <strong>Protect my firsts</strong>
-                <small>Avoid spending first-rounders unless you manually include them.</small>
-              </span>
-            </label>
-            <label class="toggle-card" for="prefer-consolidation-toggle">
-              <input id="prefer-consolidation-toggle" type="checkbox" checked />
-              <span>
-                <strong>Prefer consolidation</strong>
-                <small>Favor “depth plus picks for a stud” shapes over sideways swaps.</small>
-              </span>
-            </label>
-            <label class="toggle-card" for="swing-big-toggle">
-              <input id="swing-big-toggle" type="checkbox" />
-              <span>
-                <strong>Swing for ceiling</strong>
-                <small>Give extra credit to packages that land a real difference-maker.</small>
-              </span>
+            <label>
+              Current team state
+              <select id="team-state-select">
+                <option value="middle">Middle</option>
+                <option value="rebuilding">Rebuilding</option>
+                <option value="contending">Contending</option>
+              </select>
             </label>
           </div>
         </section>
@@ -235,31 +171,19 @@
           <div class="section-heading">
             <div class="section-kicker">
               <span class="step-badge">06</span>
-              <span class="eyebrow">Offer Builder</span>
+              <span class="eyebrow">Ideas</span>
             </div>
-            <h2>Generate offers</h2>
-            <p class="section-copy">Tune the output volume and fairness window, then let the app build a short list.</p>
+            <h2>How many ideas do you want?</h2>
+            <p class="section-copy">You will get that many direct offers, then that many versions with a small throw-in back from their side.</p>
           </div>
           <div class="grid">
             <label>
-              Fairness threshold (%)
-              <input id="fairness-input" type="number" min="1" max="50" value="20" />
-            </label>
-            <label>
-              Number of trade ideas
-              <input id="max-results-input" type="number" min="1" max="8" value="4" />
-            </label>
-            <label>
-              Optional KTC JSON URL
-              <input id="ktc-url-input" placeholder="https://.../values.json" />
+              Number of trade ideas per style
+              <input id="max-results-input" type="number" min="1" max="6" value="3" />
             </label>
           </div>
-          <label class="toggle-option" for="allow-extra-target-assets">
-            <input id="allow-extra-target-assets" type="checkbox" />
-            <span>Ask the builder to include a throw-in from their side when your target alone does not make the numbers work.</span>
-          </label>
           <button id="generate-btn" type="button">Generate Trade Ideas</button>
-          <p class="muted small">Uses KTC-style values from your URL if provided, otherwise repo sample data + fallback estimates.</p>
+          <p class="muted small">Uses the bundled KTC-style sample values and fallback estimates for assets that are not explicitly priced.</p>
         </section>
 
         <section class="card stage-card hidden results-shell" id="results-section">
