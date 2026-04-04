@@ -2,21 +2,43 @@
 
 Reads the Sleeper API to pull in your league and advises on dynasty trades using KeepTradeCut-style values.
 
-## MVP Features
-- Pulls league rosters and players from Sleeper.
-- Lets you specify: **me**, **target manager**, and **target player**.
-- Scores assets using a KeepTradeCut value table.
-- Generates simple 1-for-1 and 2-for-1 offers.
-- Filters offers where total values are within a fairness threshold (default: ±15%).
+## What now exists in this monorepo
+- **Python CLI (existing MVP):** command-line trade suggestions.
+- **Static website UI (new):** a browser-based flow you can host on GitHub Pages and open via link.
 
-## Setup
+## Web app (no terminal required)
+The full UI lives in `docs/` and is deployable on GitHub Pages.
+
+### User flow in the website
+1. Enter Sleeper League ID.
+2. Pick which manager you are.
+3. Search/select the player you want from another roster.
+4. Generate 3–4 trade ideas based on valuation data.
+
+### Value source behavior
+- Uses optional JSON endpoint if you provide one (shape: `[{"asset_id":"player:8155","value":8200}]`).
+- Falls back to repo sample values in `docs/data/ktc_values_sample.csv`.
+- For assets missing values, uses a lightweight position/age estimate so the UI can still produce suggestions.
+
+## GitHub Pages deployment
+A workflow is included at `.github/workflows/deploy-pages.yml`.
+
+After pushing to GitHub:
+1. In your repo, go to **Settings → Pages**.
+2. Ensure source is **GitHub Actions**.
+3. Wait for the **Deploy static site to GitHub Pages** workflow to complete.
+4. Open your Pages URL (typically `https://<your-user>.github.io/<repo-name>/`).
+
+## CLI (still available)
+
+### Setup
 ```bash
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-## Usage
+### Usage
 ```bash
 python -m src.cli \
   --league <LEAGUE_ID> \
@@ -38,20 +60,8 @@ python -m src.cli \
   --target-player "Jahmyr Gibbs"
 ```
 
-## Valuation Source
-By default, this project reads a local sample table (`data/ktc_values_sample.csv`).
-
-You can point to an external JSON endpoint with:
-- `--ktc-url` where JSON shape is:
-```json
-[
-  {"asset_id": "player:8155", "value": 8200},
-  {"asset_id": "pick:2027:r1:any", "value": 5200}
-]
-```
-
 ## Notes
 - Asset IDs are normalized as:
   - Players: `player:<sleeper_player_id>`
   - Picks: `pick:<season>:r<round>:<original_owner|any>`
-- Suggestions skip assets missing valuation.
+- Suggestions may differ depending on how complete your valuation dataset is.
