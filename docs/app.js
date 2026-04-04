@@ -17,6 +17,8 @@ const el = {
   leagueId: document.querySelector("#league-id"),
   loadLeagueBtn: document.querySelector("#load-league-btn"),
   leagueStatus: document.querySelector("#league-status"),
+  leagueStatusText: document.querySelector("#league-status-text"),
+  leagueStatusLoader: document.querySelector("#league-status-loader"),
   identitySection: document.querySelector("#identity-section"),
   meSelect: document.querySelector("#me-select"),
   playerSection: document.querySelector("#player-section"),
@@ -40,6 +42,15 @@ el.meSelect.addEventListener("change", () => {
 });
 el.generateBtn.addEventListener("click", generateTradeIdeas);
 
+let leagueLoadAnimationTimer = null;
+let leagueLoadStartedAt = 0;
+const loadingMessages = [
+  "Contacting Sleeper HQ",
+  "Syncing rosters",
+  "Building player universe",
+  "Crunching trade matrix",
+];
+
 async function loadLeague() {
   const leagueId = el.leagueId.value.trim();
   if (!leagueId) {
@@ -47,17 +58,19 @@ async function loadLeague() {
     return;
   }
 
-  setStatus("Loading league, rosters, and players...", false);
+  startLeagueLoadingUi();
   state.targetAsset = null;
   state.resultsList.innerHTML = "";
 
   try {
-    const [league, users, rosters, players] = await Promise.all([
+    const [league, users, rosters] = await Promise.all([
       apiGet(`/league/${leagueId}`),
       apiGet(`/league/${leagueId}/users`),
       apiGet(`/league/${leagueId}/rosters`),
-      apiGet(`/players/nfl`),
     ]);
+
+    setStatus("Core league loaded. Pulling latest NFL player pool...", { loading: true });
+    const players = await apiGet(`/players/nfl`, { timeoutMs: 40000 });
 
     state.leagueId = leagueId;
     state.leagueName = league?.name || `League ${leagueId}`;
@@ -70,9 +83,11 @@ async function loadLeague() {
     el.identitySection.classList.remove("hidden");
     el.playerSection.classList.remove("hidden");
     el.settingsSection.classList.remove("hidden");
-    setStatus(`Loaded ${state.leagueName}. Choose your team to continue.`, true);
+    setStatus(`Loaded ${state.leagueName}. Choose your team to continue.`, { ok: true });
   } catch (err) {
     setStatus(`Could not load league data. ${err.message}`);
+  } finally {
+    stopLeagueLoadingUi();
   }
 }
 
@@ -338,15 +353,53 @@ function coerceValueMap(payload) {
   return payload;
 }
 
-async function apiGet(path) {
-  const response = await fetch(`${API_BASE}${path}`);
-  if (!response.ok) {
-    throw new Error(`Sleeper API returned ${response.status}`);
+async function apiGet(path, { timeoutMs = 25000 } = {}) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(`${API_BASE}${path}`, { signal: controller.signal });
+    if (!response.ok) {
+      throw new Error(`Sleeper API returned ${response.status}`);
+    }
+    return response.json();
+  } catch (err) {
+    if (err.name === "AbortError") {
+      throw new Error(`Sleeper API timed out after ${Math.round(timeoutMs / 1000)}s`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeoutId);
   }
-  return response.json();
 }
 
-function setStatus(message, ok = false) {
-  el.leagueStatus.textContent = message;
-  el.leagueStatus.className = `status ${ok ? "ok" : "muted"}`;
+function setStatus(message, { ok = false, loading = false } = {}) {
+  el.leagueStatusText.textContent = message;
+  el.leagueStatus.className = `status ${ok ? "ok" : loading ? "loading" : "muted"}`;
+  el.leagueStatusLoader.classList.toggle("hidden", !loading);
+}
+
+function startLeagueLoadingUi() {
+  el.loadLeagueBtn.disabled = true;
+  el.loadLeagueBtn.classList.add("loading");
+  el.loadLeagueBtn.textContent = "Loading...";
+
+  leagueLoadStartedAt = Date.now();
+  let idx = 0;
+  setStatus(`${loadingMessages[idx]}...`, { loading: true });
+
+  clearInterval(leagueLoadAnimationTimer);
+  leagueLoadAnimationTimer = setInterval(() => {
+    idx = (idx + 1) % loadingMessages.length;
+    const elapsedSec = Math.floor((Date.now() - leagueLoadStartedAt) / 1000);
+    setStatus(`${loadingMessages[idx]} • ${elapsedSec}s`, { loading: true });
+  }, 850);
+}
+
+function stopLeagueLoadingUi() {
+  clearInterval(leagueLoadAnimationTimer);
+  leagueLoadAnimationTimer = null;
+  el.loadLeagueBtn.disabled = false;
+  el.loadLeagueBtn.classList.remove("loading");
+  el.loadLeagueBtn.textContent = "Load League";
 }
