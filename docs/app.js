@@ -182,7 +182,7 @@ function syncTargetSearchUi() {
     el.targetSearchShell.classList.toggle("has-token", hasTarget);
   }
   if (el.playerSearch) {
-    el.playerSearch.placeholder = hasTarget ? "" : "Start typing a player name...";
+    el.playerSearch.placeholder = hasTarget ? "" : "Search player or pick";
   }
 }
 
@@ -1057,16 +1057,16 @@ async function generateTradeIdeas() {
 
     el.resultsList.innerHTML = [
       renderTradeIdeaGroup({
-        title: "Straight-up offers",
-        subtitle: `Straight-up offers for ${state.targetAsset.name} only.`,
-        emptyText: "No straight-up offers survived the value and roster-fit checks.",
+        title: "Direct offers",
+        subtitle: `Offers for ${state.targetAsset.name} only.`,
+        emptyText: "No direct offers fit the current filters.",
         ideas: enrichedDirectIdeas,
         values: state.values,
       }),
       renderTradeIdeaGroup({
-        title: "Add-on-back offers",
+        title: "Offers with a small add-on",
         subtitle: `${state.targetAsset.name} plus one smaller piece from their side.`,
-        emptyText: "No clean throw-in-back variations fit the current setup.",
+        emptyText: "No add-on variations fit the current setup.",
         ideas: enrichedThrowInIdeas,
         values: state.values,
       }),
@@ -1127,11 +1127,11 @@ function buildResultsSubtitle({ meRoster, theirRoster, targetAsset, tradeLab }) 
 
 function buildNoIdeasMessage(tradeLab) {
   const advice = [];
-  if (tradeLab.selectedOutgoingAssetIds.size > 0) advice.push("remove the include lock or add more assets");
-  if (tradeLab.excludedOutgoingAssetIds.size > 0) advice.push("protect fewer assets");
+  if (tradeLab.selectedOutgoingAssetIds.size > 0) advice.push("broaden the included asset pool");
+  if (tradeLab.excludedOutgoingAssetIds.size > 0) advice.push("exclude fewer assets");
   advice.push("change the target");
-  advice.push("try a different team lens");
-  return `No trade ideas cleared the value and fit checks. Try to ${advice.join(", ")}.`;
+  advice.push("adjust the team direction");
+  return `No offers cleared the value and roster-fit filters. Try to ${advice.join(", ")}.`;
 }
 
 function renderTradeIdeaGroup({ title, subtitle, emptyText, ideas, values }) {
@@ -1157,7 +1157,7 @@ function renderTradeCard(idea, index, values) {
     <details class="trade-card" ${isInitiallyOpen ? "open" : ""}>
       <summary class="trade-card-summary">
         <div>
-          <h3>Offer ${index + 1}</h3>
+          <h3>Idea ${index + 1}</h3>
           <p class="trade-card-preview">
             ${idea.myAssets.length} send • ${idea.theirAssets.length} receive • even-up ${evenValueLabel}
           </p>
@@ -1168,14 +1168,14 @@ function renderTradeCard(idea, index, values) {
         <div class="trade-body-grid">
           <section class="trade-side team-a">
             <div class="trade-side-heading">
-              <span class="trade-side-kicker">Team A</span>
+              <span class="trade-side-kicker">Outgoing</span>
               <h4>You send</h4>
             </div>
             ${renderAssetList(idea.myAssets, values, "team-a")}
           </section>
           <section class="trade-side team-b">
             <div class="trade-side-heading">
-              <span class="trade-side-kicker">Team B</span>
+              <span class="trade-side-kicker">Incoming</span>
               <h4>You receive</h4>
             </div>
             ${renderAssetList(idea.theirAssets, values, "team-b")}
@@ -1218,7 +1218,7 @@ function renderImpactAnalysis(impactAnalysis, values) {
     </div>
     <p class="muted small">${impactAnalysis.overallSummary}</p>
     <details class="lineup-details">
-      <summary>See lineup comparison</summary>
+      <summary>View lineup impact</summary>
       <div class="lineup-details-body">
         <div class="lineup-comparison-grid">
           ${renderLineupStateCard("You After", impactAnalysis.mySide.after, values, "team-a")}
