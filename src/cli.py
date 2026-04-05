@@ -64,6 +64,11 @@ def main() -> int:
         league = client.get_league(league_id)
         users = client.get_users_in_league(league_id)
         rosters = client.get_rosters(league_id)
+        traded_picks = []
+        try:
+            traded_picks = client.get_traded_picks(league_id)
+        except RuntimeError as exc:
+            logging.warning("Could not load traded picks for league %s: %s", league_id, exc)
         players = client.get_players("nfl")
 
         previous_league = None
@@ -83,6 +88,8 @@ def main() -> int:
             players,
             previous_league=previous_league,
             previous_rosters=previous_rosters,
+            league=league,
+            traded_picks=traded_picks,
         )
 
         my_roster = find_manager_roster(ctx, args.me)

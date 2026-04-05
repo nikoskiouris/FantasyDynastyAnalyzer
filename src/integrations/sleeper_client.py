@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
 
@@ -41,6 +42,11 @@ class SleeperClient:
 
     def get_rosters(self, league_id: str) -> list[dict]:
         data = self._get(f"/league/{league_id}/rosters")
+        assert isinstance(data, list)
+        return data
+
+    def get_traded_picks(self, league_id: str) -> list[dict]:
+        data = self._get(f"/league/{league_id}/traded_picks")
         assert isinstance(data, list)
         return data
 
@@ -197,6 +203,160 @@ def normalize_pick(
     return Asset(asset_id=asset_id, name=name, asset_type="pick", raw=pick)
 
 
+def _normalize_roster_key(value: object) -> str | None:
+    if value in (None, ""):
+        return None
+    return str(value)
+
+
+def _coerce_int(value: object) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _normalize_owned_pick_record(pick: dict, fallback_owner_id: object | None = None) -> dict | None:
+    season = pick.get("season")
+    round_ = _coerce_int(pick.get("round"))
+    if season in (None, "") or round_ is None:
+        return None
+
+    original_owner = pick.get("original_owner")
+    if original_owner is None:
+        original_owner = pick.get("roster_id", fallback_owner_id)
+    current_owner = pick.get("owner_id")
+    if current_owner is None:
+        current_owner = fallback_owner_id if fallback_owner_id is not None else original_owner
+    return {
+        **pick,
+        "season": str(season),
+        "round": round_,
+        "roster_id": original_owner,
+        "original_owner": original_owner,
+        "owner_id": current_owner,
+        "previous_owner_id": pick.get("previous_owner_id", current_owner),
+    }
+
+
+def _normalize_traded_pick_record(pick: dict) -> dict | None:
+    season = pick.get("season")
+    round_ = _coerce_int(pick.get("round"))
+    original_owner = pick.get("roster_id")
+    if original_owner is None:
+        original_owner = pick.get("original_owner")
+    current_owner = pick.get("owner_id")
+    if season in (None, "") or round_ is None or original_owner is None or current_owner is None:
+        return None
+
+    return {
+        **pick,
+        "season": str(season),
+        "round": round_,
+        "roster_id": original_owner,
+        "original_owner": original_owner,
+        "owner_id": current_owner,
+        "previous_owner_id": pick.get("previous_owner_id", current_owner),
+    }
+
+
+def _infer_league_pick_seasons(league: dict | None, rosters: list[dict], traded_picks: list[dict]) -> list[str]:
+    explicit_seasons = [
+        season
+        for roster in rosters
+        for pick in roster.get("picks", []) or []
+        if (season := _coerce_int((pick or {}).get("season"))) is not None
+    ]
+    traded_seasons = [season for pick in traded_picks if (season := _coerce_int((pick or {}).get("season"))) is not None]
+
+    base_season = _coerce_int((league or {}).get("season")) or datetime.utcnow().year
+    observed_start_seasons = [*explicit_seasons, *traded_seasons]
+    start_season = min(observed_start_seasons) if observed_start_seasons else base_season
+    end_season = max([*explicit_seasons, *traded_seasons, start_season + (1 if observed_start_seasons else 2)])
+    return [str(season) for season in range(start_season, end_season + 1)]
+
+
+def _infer_league_draft_rounds(league: dict | None, rosters: list[dict], traded_picks: list[dict]) -> int:
+    configured_rounds = _coerce_int(((league or {}).get("settings") or {}).get("draft_rounds")) or 0
+    explicit_rounds = [
+        round_
+        for roster in rosters
+        for pick in roster.get("picks", []) or []
+        if (round_ := _coerce_int((pick or {}).get("round"))) is not None
+    ]
+    traded_rounds = [round_ for pick in traded_picks if (round_ := _coerce_int((pick or {}).get("round"))) is not None]
+    if configured_rounds > 0:
+        return max([configured_rounds, *explicit_rounds, *traded_rounds])
+    return max([*explicit_rounds, *traded_rounds, 5])
+
+
+def _build_pick_ownership_key(season: str, round_: int, original_owner_key: str) -> str:
+    return f"{season}:{round_}:{original_owner_key}"
+
+
+def _build_owned_picks_by_roster(league: dict | None, rosters: list[dict], traded_picks: list[dict] | None) -> dict[str, list[dict]]:
+    roster_keys = [key for roster in rosters if (key := _normalize_roster_key(roster.get("roster_id"))) is not None]
+    owned_by_roster = {roster_key: [] for roster_key in roster_keys}
+    explicit_pick_count = sum(len(roster.get("picks", []) or []) for roster in rosters)
+
+    if explicit_pick_count:
+        for roster in rosters:
+            roster_key = _normalize_roster_key(roster.get("roster_id"))
+            if roster_key is None:
+                continue
+            owned_by_roster[roster_key] = [
+                normalized
+                for pick in roster.get("picks", []) or []
+                if (normalized := _normalize_owned_pick_record(pick, roster.get("roster_id"))) is not None
+            ]
+        return owned_by_roster
+
+    normalized_traded_picks = [
+        normalized
+        for pick in (traded_picks or [])
+        if (normalized := _normalize_traded_pick_record(pick)) is not None
+    ]
+    seasons = _infer_league_pick_seasons(league, rosters, normalized_traded_picks)
+    draft_rounds = _infer_league_draft_rounds(league, rosters, normalized_traded_picks)
+    roster_key_set = set(roster_keys)
+    current_owner_by_pick: dict[str, str] = {}
+
+    for season in seasons:
+        for round_ in range(1, draft_rounds + 1):
+            for original_owner_key in roster_keys:
+                current_owner_by_pick[_build_pick_ownership_key(season, round_, original_owner_key)] = original_owner_key
+
+    for pick in normalized_traded_picks:
+        original_owner_key = _normalize_roster_key(pick.get("roster_id"))
+        current_owner_key = _normalize_roster_key(pick.get("owner_id"))
+        if (
+            original_owner_key is None
+            or current_owner_key is None
+            or original_owner_key not in roster_key_set
+            or current_owner_key not in roster_key_set
+        ):
+            continue
+        current_owner_by_pick[_build_pick_ownership_key(str(pick["season"]), int(pick["round"]), original_owner_key)] = current_owner_key
+
+    for ownership_key, current_owner_key in current_owner_by_pick.items():
+        season, round_token, original_owner_key = ownership_key.split(":")
+        owned_by_roster[current_owner_key].append(
+            {
+                "season": season,
+                "round": int(round_token),
+                "roster_id": int(original_owner_key) if original_owner_key.isdigit() else original_owner_key,
+                "original_owner": int(original_owner_key) if original_owner_key.isdigit() else original_owner_key,
+                "owner_id": int(current_owner_key) if current_owner_key.isdigit() else current_owner_key,
+                "previous_owner_id": int(current_owner_key) if current_owner_key.isdigit() else current_owner_key,
+            }
+        )
+
+    for picks in owned_by_roster.values():
+        picks.sort(key=lambda pick: (_coerce_int(pick.get("season")) or 0, _coerce_int(pick.get("round")) or 0, str(pick.get("original_owner"))))
+
+    return owned_by_roster
+
+
 def build_league_context(
     league_id: str,
     users: list[dict],
@@ -204,10 +364,13 @@ def build_league_context(
     players: dict,
     previous_league: dict | None = None,
     previous_rosters: list[dict] | None = None,
+    league: dict | None = None,
+    traded_picks: list[dict] | None = None,
 ) -> LeagueContext:
     user_by_id = {str(u["user_id"]): u for u in users}
     roster_by_id = {str(r["roster_id"]): r for r in rosters}
     previous_finish_by_roster_id, previous_finish_by_user_id = _build_previous_finish_lookup(previous_league, previous_rosters)
+    owned_picks_by_roster = _build_owned_picks_by_roster(league, rosters, traded_picks)
     normalized_rosters: list[Roster] = []
 
     for roster in rosters:
@@ -228,7 +391,7 @@ def build_league_context(
             )
             assets.append(Asset(asset_id=f"player:{pid}", name=name, asset_type="player", raw=player_meta))
 
-        for pick in roster.get("picks", []) or []:
+        for pick in owned_picks_by_roster.get(str(roster.get("roster_id")), []):
             assets.append(
                 normalize_pick(
                     pick,
