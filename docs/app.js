@@ -977,10 +977,10 @@ function updateSelectedAssetsSummary() {
   const count = state.selectedOutgoingAssetIds.size;
   const includeEnabled = Boolean(el.includeAssetsToggle?.checked);
   el.selectedAssetsSummary.textContent = !includeEnabled
-    ? "Leave this off unless you want to force the generator to use exact assets."
+    ? "Leave this off unless you want every offer to include specific assets."
     : count > 0
-      ? `The generator will only use these ${count} selected asset${count === 1 ? "" : "s"}.`
-      : "Turn this on only if you want to force exact assets into every offer.";
+      ? `Every offer will include these ${count} selected asset${count === 1 ? "" : "s"}, and the generator can add more if needed.`
+      : "Turn this on if you want every offer to include specific assets you choose.";
   if (el.includeAssetsSummaryLabel) {
     el.includeAssetsSummaryLabel.textContent = count > 0
       ? `${count} asset${count === 1 ? "" : "s"} selected`
@@ -1069,7 +1069,7 @@ async function generateTradeIdeas() {
     return;
   }
   if (el.includeAssetsToggle?.checked && state.selectedOutgoingAssetIds.size === 0) {
-    alert("Choose at least one player or pick to throw in, or turn that option off.");
+    alert("Choose at least one player or pick to anchor offers around, or turn that option off.");
     return;
   }
 
@@ -1212,7 +1212,7 @@ function buildResultsSubtitle({ meRoster, theirRoster, targetAsset, tradeLab }) 
   notes.push(`${getTeamStateLabel(tradeLab.teamState)} lens`);
   if (tradeLab.positionPremium !== "none") notes.push(`${tradeLab.positionPremium} premium`);
   if (tradeLab.selectedOutgoingAssetIds.size > 0) {
-    notes.push(`${tradeLab.selectedOutgoingAssetIds.size} included`);
+    notes.push(`${tradeLab.selectedOutgoingAssetIds.size} anchored`);
   }
   if (tradeLab.excludedOutgoingAssetIds.size > 0) {
     notes.push(`${tradeLab.excludedOutgoingAssetIds.size} protected`);
@@ -1222,7 +1222,7 @@ function buildResultsSubtitle({ meRoster, theirRoster, targetAsset, tradeLab }) 
 
 function buildNoIdeasMessage(tradeLab) {
   const advice = [];
-  if (tradeLab.selectedOutgoingAssetIds.size > 0) advice.push("broaden the included asset pool");
+  if (tradeLab.selectedOutgoingAssetIds.size > 0) advice.push("require fewer included assets");
   if (tradeLab.excludedOutgoingAssetIds.size > 0) advice.push("exclude fewer assets");
   advice.push("change the target");
   advice.push("adjust the team direction");
@@ -2025,7 +2025,13 @@ function suggestTrades({
 
   const globalMaxValue = searchContext?.globalMaxValue ?? getGlobalMaxPlayerValue(values, targetValue);
   const maxOutgoingAssets = searchContext?.maxOutgoingAssets ?? getMaxOutgoingPackageSize(targetValue);
-  const myPackages = searchContext?.myPackages || buildPackages(myAssetPool, values, maxOutgoingAssets);
+  const requiredOutgoingAssetIds = searchContext?.requiredOutgoingAssetIds
+    || new Set(
+      [...tradeLab.selectedOutgoingAssetIds].filter((assetId) => myAssetPool.some((asset) => asset.assetId === assetId))
+    );
+  const myPackages = searchContext?.myPackages || buildPackages(myAssetPool, values, maxOutgoingAssets, {
+    requiredAssetIds: requiredOutgoingAssetIds,
+  });
   const theirPackages = buildTargetPackages({ theirRoster, targetAsset, values, allowExtraTargetAssets, maxExtraAssets: 1 }).filter(
     (pkg) => (requireExtraTargetAsset ? pkg.assets.length > 1 : pkg.assets.length === 1)
   );
@@ -2093,13 +2099,18 @@ function buildTradeSearchContext({ myRoster, targetAsset, values, fairnessPct, t
   const coreAssetIds = getCoreAssetIdSet(myRoster, values);
   const myAssetPool = resolveOutgoingAssetPool({ myRoster, values, tradeLab, targetValue, coreAssetIds });
   if (myAssetPool.length === 0) return null;
+  const requiredOutgoingAssetIds = new Set(
+    [...tradeLab.selectedOutgoingAssetIds].filter((assetId) => myAssetPool.some((asset) => asset.assetId === assetId))
+  );
+  const maxOutgoingAssets = getMaxOutgoingPackageSize(targetValue);
 
   return {
     targetValue,
     coreAssetIds,
     myAssetPool,
-    maxOutgoingAssets: getMaxOutgoingPackageSize(targetValue),
-    myPackages: buildPackages(myAssetPool, values, getMaxOutgoingPackageSize(targetValue)),
+    requiredOutgoingAssetIds,
+    maxOutgoingAssets,
+    myPackages: buildPackages(myAssetPool, values, maxOutgoingAssets, { requiredAssetIds: requiredOutgoingAssetIds }),
     globalMaxValue: Math.max(state.globalMaxPlayerValue || KTC_GLOBAL_MAX_FALLBACK, targetValue),
     effectiveFairnessPct: getEffectiveFairnessPct(fairnessPct, tradeLab.tradeVibe),
   };
@@ -2115,7 +2126,17 @@ function resolveOutgoingAssetPool({ myRoster, values, tradeLab, targetValue = 0,
   );
 
   if (tradeLab.selectedOutgoingAssetIds.size > 0) {
-    return pool.filter((asset) => tradeLab.selectedOutgoingAssetIds.has(asset.assetId));
+    const selectedAssets = pool.filter((asset) => tradeLab.selectedOutgoingAssetIds.has(asset.assetId));
+    const optionalAssets = limitOutgoingAssetPool(
+      pool.filter((asset) => !tradeLab.selectedOutgoingAssetIds.has(asset.assetId)),
+      values,
+      targetValue,
+      {
+        coreAssetIds: coreAssetIds || getCoreAssetIdSet(myRoster, values),
+        teamState: tradeLab.teamState,
+      }
+    );
+    return [...selectedAssets, ...optionalAssets];
   }
 
   const resolvedCoreAssetIds = coreAssetIds || getCoreAssetIdSet(myRoster, values);
@@ -2717,17 +2738,29 @@ function calculatePackageAdjustment({ myValues, theirValues, globalMaxValue }) {
   };
 }
 
-function buildPackages(assets, values, maxAssets) {
+function buildPackages(assets, values, maxAssets, { requiredAssetIds = new Set() } = {}) {
   const valuedAssets = assets
     .map((asset) => ({ asset, value: getAssetValue(asset, values) }))
     .filter((entry) => Number.isFinite(entry.value));
+  const requiredEntries = valuedAssets.filter((entry) => requiredAssetIds.has(entry.asset.assetId));
+  const optionalEntries = valuedAssets.filter((entry) => !requiredAssetIds.has(entry.asset.assetId));
+  const requiredCount = requiredEntries.length;
+
+  if (requiredCount > maxAssets) return [];
 
   const packages = [];
-  for (let size = 1; size <= Math.min(maxAssets, valuedAssets.length); size++) {
-    for (const combo of combinationsOfSize(valuedAssets, size)) {
+  const minimumPackageSize = requiredCount > 0 ? requiredCount : 1;
+  const maxOptionalAssets = Math.min(maxAssets - requiredCount, optionalEntries.length);
+
+  for (let size = minimumPackageSize; size <= Math.min(maxAssets, valuedAssets.length); size++) {
+    const optionalSize = size - requiredCount;
+    if (optionalSize < 0 || optionalSize > maxOptionalAssets) continue;
+    const combos = optionalSize === 0 ? [[]] : combinationsOfSize(optionalEntries, optionalSize);
+    for (const combo of combos) {
+      const fullCombo = [...requiredEntries, ...combo];
       packages.push({
-        assets: combo.map((entry) => entry.asset),
-        values: combo.map((entry) => entry.value),
+        assets: fullCombo.map((entry) => entry.asset),
+        values: fullCombo.map((entry) => entry.value),
       });
     }
   }
@@ -3159,7 +3192,12 @@ function normalizeRosters(league, rosters, users, players, previousContext = { l
     const pickAssets = (ownedPicksByRoster.get(String(roster.roster_id)) || []).map((pick) => {
       const finishInfo = resolvePreviousFinishInfo(pick.original_owner, rosterById, previousFinishLookup);
       const pickBucket = Number(pick.round) === 1 ? finishInfo?.bucket || "any" : "any";
-      const assignedDraftSlot = resolveAssignedDraftSlot(pick, currentDraftContext);
+      const assignedDraftSlot = resolveAssignedDraftSlot(
+        pick,
+        currentDraftContext,
+        finishInfo,
+        previousContext?.league
+      );
       return {
         assetId: `pick:${pick.season}:r${pick.round}:${pick.original_owner || "any"}`,
         valueAssetId: buildPickValueAssetId(pick, pickBucket),
@@ -3333,21 +3371,42 @@ function formatAssignedPickSlot(round, slot, totalSlots = 0) {
   return `${roundNumber}.${String(slotNumber).padStart(padWidth, "0")}`;
 }
 
-function resolveAssignedDraftSlot(pick, currentDraftContext) {
-  if (!currentDraftContext || String(pick?.season || "") !== String(currentDraftContext.season || "")) {
-    return null;
+function resolveAssignedDraftSlot(pick, currentDraftContext, finishInfo = null, previousLeague = null) {
+  const rosterKey = normalizeRosterIdKey(pick?.original_owner);
+  if (rosterKey && currentDraftContext && String(pick?.season || "") === String(currentDraftContext.season || "")) {
+    const slot = currentDraftContext.slotByRosterId?.get(rosterKey);
+    if (Number.isFinite(slot)) {
+      return {
+        slot,
+        totalSlots: Number(currentDraftContext.totalSlots) || 0,
+        label: formatAssignedPickSlot(pick?.round, slot, currentDraftContext.totalSlots),
+      };
+    }
   }
 
-  const rosterKey = normalizeRosterIdKey(pick?.original_owner);
-  if (!rosterKey) return null;
-  const slot = currentDraftContext.slotByRosterId?.get(rosterKey);
-  if (!Number.isFinite(slot)) return null;
+  const pickSeason = Number(pick?.season);
+  const previousSeason = Number(previousLeague?.season);
+  const finishRank = Number(finishInfo?.rank);
+  const totalTeams = Number(finishInfo?.totalTeams);
+  if (
+    Number.isFinite(pickSeason)
+    && Number.isFinite(previousSeason)
+    && pickSeason === previousSeason + 1
+    && Number.isFinite(finishRank)
+    && Number.isFinite(totalTeams)
+    && totalTeams > 0
+  ) {
+    const slot = totalTeams - finishRank + 1;
+    if (Number.isFinite(slot) && slot >= 1 && slot <= totalTeams) {
+      return {
+        slot,
+        totalSlots: totalTeams,
+        label: formatAssignedPickSlot(pick?.round, slot, totalTeams),
+      };
+    }
+  }
 
-  return {
-    slot,
-    totalSlots: Number(currentDraftContext.totalSlots) || 0,
-    label: formatAssignedPickSlot(pick?.round, slot, currentDraftContext.totalSlots),
-  };
+  return null;
 }
 
 function buildPickValueAssetId(pick, pickBucket = "any") {
