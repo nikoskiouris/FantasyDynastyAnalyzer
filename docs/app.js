@@ -3112,6 +3112,13 @@ function ordinal(rank) {
   return `${rank}${suffix}`;
 }
 
+function formatPreviousYearRankLabel(rank, totalTeams) {
+  if (!Number.isFinite(rank) || !Number.isFinite(totalTeams) || totalTeams <= 0) {
+    return "Previous Year";
+  }
+  return `${ordinal(rank)}/${ordinal(totalTeams)} in Previous Year`;
+}
+
 function buildPreviousFinishLookup(previousLeague, previousRosters = []) {
   if (!previousLeague || previousRosters.length === 0) {
     return { byRosterId: new Map(), byUserId: new Map() };
@@ -3152,7 +3159,7 @@ function buildPreviousFinishLookup(previousLeague, previousRosters = []) {
       totalTeams,
       bucket,
       tierLabel,
-      label: `${tierLabel} in ${season}`,
+      label: formatPreviousYearRankLabel(finishRank, totalTeams),
     };
     byRosterId.set(entry.rosterId, info);
     if (entry.ownerId) byUserId.set(entry.ownerId, info);

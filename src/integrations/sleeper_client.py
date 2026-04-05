@@ -79,11 +79,16 @@ def _ordinal(rank: int) -> str:
     return f"{rank}{suffix}"
 
 
+def _format_previous_year_rank_label(rank: int, total_teams: int) -> str:
+    if rank <= 0 or total_teams <= 0:
+        return "Previous Year"
+    return f"{_ordinal(rank)}/{_ordinal(total_teams)} in Previous Year"
+
+
 def _build_previous_finish_lookup(previous_league: dict | None, previous_rosters: list[dict] | None) -> tuple[dict[str, str], dict[str, str]]:
     if not previous_league or not previous_rosters:
         return {}, {}
 
-    season = str(previous_league.get("season") or "previous season")
     ranked = [
         {
             "roster_id": str(roster.get("roster_id")),
@@ -97,8 +102,9 @@ def _build_previous_finish_lookup(previous_league: dict | None, previous_rosters
 
     by_roster_id: dict[str, str] = {}
     by_user_id: dict[str, str] = {}
+    total_teams = len(ranked)
     for idx, row in enumerate(ranked, start=1):
-        label = f"{_ordinal(idx)} in {season} PF"
+        label = _format_previous_year_rank_label(idx, total_teams)
         by_roster_id[row["roster_id"]] = label
         if row["owner_id"] is not None:
             by_user_id[row["owner_id"]] = label
