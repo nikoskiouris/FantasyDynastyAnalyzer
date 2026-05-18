@@ -58,12 +58,41 @@
             <div class="section-heading">
               <div class="section-kicker">
                 <span class="step-badge">03</span>
-                <span class="eyebrow">Target</span>
+                <span class="eyebrow">Trade Plan</span>
               </div>
-              <h2>Choose a target</h2>
-              <p class="section-copy">Search the rest of the league and choose the player or pick you want back.</p>
+              <h2>Set the trade path</h2>
+              <p class="section-copy">Pick whether you want to go get someone, shop one of your own assets, or build a multi-team structure.</p>
             </div>
-            <label for="player-search">Search players and picks on other rosters</label>
+            <div class="grid mode-grid">
+              <label>
+                Trade mode
+                <select id="trade-mode-select">
+                  <option value="acquire">Go get a player or pick</option>
+                  <option value="shop">Shop one of my assets</option>
+                  <option value="multi-target">Use a multi-team route to get a target</option>
+                  <option value="multi-custom">Build a custom multi-team trade</option>
+                </select>
+              </label>
+              <label>
+                Trade tier
+                <select id="trade-tier-select">
+                  <option value="all">Show all tiers</option>
+                  <option value="level-up">Level up</option>
+                  <option value="even">Trade even</option>
+                  <option value="break-down">Break down</option>
+                </select>
+              </label>
+              <label id="multi-team-count-wrap" class="hidden">
+                Total teams in the trade
+                <select id="multi-team-count-select"></select>
+              </label>
+              <label id="custom-team-count-wrap" class="hidden">
+                Other teams involved
+                <select id="custom-team-count-select"></select>
+              </label>
+            </div>
+            <p id="trade-mode-help" class="muted small mode-note">Pick a path, then choose the asset you want to build around.</p>
+            <label id="player-search-label" for="player-search">Search players and picks on other rosters</label>
             <div id="target-search-shell" class="target-search-shell">
               <div id="target-chip" class="selected-token hidden">
                 <span id="target-chip-label" class="selected-token-label"></span>
@@ -72,6 +101,14 @@
               <input id="player-search" placeholder="Search player or pick" />
             </div>
             <div id="player-results" class="list"></div>
+            <div id="multi-custom-panel" class="multi-team-builder hidden">
+              <div class="section-heading compact-heading">
+                <h3>Custom Multi-Team Framework</h3>
+                <p class="section-copy">Choose the other teams, then assign the one asset each team wants back. The generator will try to close the full cycle and add balancing pieces where needed.</p>
+              </div>
+              <div id="multi-custom-team-slots" class="multi-team-slot-list"></div>
+              <div id="multi-custom-wants" class="multi-team-wants-list"></div>
+            </div>
           </section>
 
           <section class="card stage-card hidden trade-lab" id="builder-section">

@@ -325,6 +325,14 @@ input[type="checkbox"] {
   gap: 0.9rem;
 }
 
+.mode-grid {
+  margin-bottom: 0.9rem;
+}
+
+.mode-note {
+  margin: 0 0 1rem;
+}
+
 button {
   cursor: pointer;
   border-color: #1d1c19;
@@ -446,6 +454,10 @@ button:disabled {
   border-top: 1px solid var(--border);
 }
 
+.compact-heading {
+  margin-bottom: 0.95rem;
+}
+
 .builder-toggle {
   display: inline-flex;
   align-items: center;
@@ -553,6 +565,56 @@ button:disabled {
   color: var(--muted);
   font-size: 0.78rem;
   font-weight: 600;
+}
+
+.multi-team-builder {
+  margin-top: 1rem;
+  padding: 1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-soft);
+}
+
+.multi-team-slot-list,
+.multi-team-wants-list {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.multi-team-slot-list {
+  margin-bottom: 0.95rem;
+}
+
+.multi-team-slot-card,
+.multi-team-want-card,
+.multi-team-party-card {
+  padding: 1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+
+.multi-team-slot-card,
+.multi-team-want-card {
+  box-shadow: var(--shadow-sm);
+}
+
+.participant-pill-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin-top: 0.6rem;
+}
+
+.participant-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.25rem 0.55rem;
+  border-radius: 999px;
+  background: var(--surface-soft);
+  color: var(--muted-strong);
+  font-size: 0.74rem;
+  font-weight: 700;
 }
 
 .list {
@@ -715,6 +777,13 @@ button:disabled {
   margin: 0;
 }
 
+.trade-card-context {
+  margin-top: 0.18rem;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
 .trade-card-preview {
   margin-top: 0.3rem;
   color: var(--muted);
@@ -756,6 +825,56 @@ button:disabled {
 
 .trade-card-body {
   padding: 1.1rem;
+}
+
+.multi-team-card {
+  padding: 1.05rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-muted);
+}
+
+.multi-team-card + .multi-team-card {
+  margin-top: 0.8rem;
+}
+
+.multi-team-card-header {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.8rem;
+  margin-bottom: 0.9rem;
+}
+
+.multi-team-card-header h3,
+.multi-team-card-header p,
+.multi-team-party-card h4,
+.multi-team-party-card p {
+  margin-bottom: 0;
+}
+
+.multi-team-party-grid {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.multi-team-party-card {
+  background: var(--surface);
+}
+
+.multi-team-party-card.you {
+  border-color: var(--team-a-border);
+  background: var(--team-a-soft);
+}
+
+.multi-team-party-card.other {
+  border-color: var(--team-b-border);
+}
+
+.multi-team-flow {
+  margin: 0.8rem 0 0;
+  color: var(--muted);
+  font-size: 0.88rem;
 }
 
 .trade-body-grid {
