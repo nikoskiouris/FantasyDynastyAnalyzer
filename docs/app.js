@@ -45,6 +45,12 @@ const MULTI_TEAM_MAX_UNREQUESTED_ANCHOR_RATIO_BASE = 0.82;
 const MULTI_TEAM_MAX_UNREQUESTED_ANCHOR_RATIO_STEP = 0.18;
 const MULTI_TEAM_MAX_FILLER_OVERAGE_RATIO_BASE = 0.18;
 const MULTI_TEAM_MAX_FILLER_OVERAGE_RATIO_STEP = 0.05;
+const MULTI_TEAM_COMPENSATION_BEAM_WIDTH = 28;
+const MULTI_TEAM_COMPENSATION_BRANCH_LIMIT = 10;
+const MULTI_TEAM_COMPENSATION_DONOR_LIMIT = 3;
+const MULTI_TEAM_COMPENSATION_RECIPIENT_LIMIT = 3;
+const MULTI_TEAM_COMPENSATION_ASSET_POOL_LIMIT = 8;
+const MULTI_TEAM_COMPENSATION_TOLERANCE = 325;
 const AUTO_MULTI_TEAM_MY_ANCHOR_CANDIDATE_LIMIT = 3;
 const AUTO_MULTI_TEAM_HELPER_ANCHOR_CANDIDATE_LIMIT = 2;
 const AUTO_MULTI_TEAM_HELPER_ANCHOR_CAP_SHARE = 0.68;
@@ -3200,26 +3206,19 @@ function buildMultiTeamIdeasFromAnchors({
   const balanceContext = buildMultiTeamBalanceContext(baseState, values);
   if (!balanceContext) return [];
 
-  const packageVariants = buildMultiTeamPackageVariants({
+  const compensationPlans = solveMultiTeamCompensationPlans({
     tradeState: baseState,
     balanceContext,
     meRoster,
     values,
     tradeLab,
+    maxResults,
   });
   const ideas = [];
 
-  for (const packageVariant of packageVariants) {
-    const fillerAssignment = assignMultiTeamFillers({
-      tradeState: baseState,
-      balanceContext,
-      packageVariant,
-      values,
-    });
-    if (!fillerAssignment) continue;
-
+  for (const compensationPlan of compensationPlans) {
     const variantState = cloneMultiTeamTradeState(baseState);
-    fillerAssignment.transfers.forEach((transfer) => {
+    compensationPlan.transfers.forEach((transfer) => {
       addMultiTeamTransfer(variantState.stateByRosterId, {
         fromRosterId: transfer.fromRosterId,
         toRosterId: transfer.toRosterId,
@@ -3236,7 +3235,7 @@ function buildMultiTeamIdeasFromAnchors({
       fairnessPct,
       focusLabel,
       balanceContext,
-      assignmentMeta: fillerAssignment.meta,
+      assignmentMeta: compensationPlan.meta,
     });
     if (finalizedIdea) ideas.push(finalizedIdea);
   }
@@ -3782,6 +3781,388 @@ function buildMultiTeamBalanceContext(tradeState, values) {
     totalNeedSend,
     totalNeedReceive,
   };
+}
+
+function solveMultiTeamCompensationPlans({
+  tradeState,
+  balanceContext,
+  meRoster,
+  values,
+  tradeLab,
+  maxResults,
+}) {
+  const participantCount = tradeState.participantRosters.length;
+  const candidatePools = buildMultiTeamCompensationCandidatePools({
+    tradeState,
+    meRoster,
+    values,
+    tradeLab,
+  });
+  const basePairSet = new Set(
+    [...tradeState.stateByRosterId.values()]
+      .flatMap((participantState) => participantState.outgoingTransfers.map((transfer) => `${transfer.fromRosterId}->${transfer.toRosterId}`))
+  );
+  const baseBalances = new Map(
+    balanceContext.participantMetrics.map((metric) => [
+      metric.roster.rosterId,
+      Math.round(metric.outgoingValue - metric.incomingValue),
+    ])
+  );
+  const initialState = {
+    transfers: [],
+    balanceByRosterId: baseBalances,
+    usedAssetIds: new Set(),
+    pairSet: new Set(),
+    receiverBySender: new Map(),
+    senderByReceiver: new Map(),
+    totalCompValue: 0,
+    corePenalty: 0,
+  };
+
+  const completeStates = [];
+  const exploredStates = [];
+  const seenStates = new Set();
+  const beamWidth = Math.max(MULTI_TEAM_COMPENSATION_BEAM_WIDTH, maxResults * 4);
+  const maxCompAssets = participantCount + Math.max(1, Math.floor(participantCount / 2));
+  let beam = [initialState];
+
+  function maybeCaptureState(state) {
+    exploredStates.push({
+      transfers: state.transfers,
+      meta: {
+        fillerValueTotal: state.totalCompValue,
+        fillerAssetCount: state.transfers.length,
+        fillerPairCount: state.pairSet.size,
+        senderSplitCount: [...state.receiverBySender.values()].reduce((sum, receiverIds) => sum + Math.max(0, receiverIds.size - 1), 0),
+        receiverSplitCount: [...state.senderByReceiver.values()].reduce((sum, senderIds) => sum + Math.max(0, senderIds.size - 1), 0),
+      },
+      stateScore: scoreMultiTeamCompensationState(state, baseBalances, participantCount),
+    });
+
+    const stateKey = createMultiTeamCompensationStateKey(state);
+    if (seenStates.has(stateKey)) return;
+    if (!isMultiTeamCompensationStateViable(state, baseBalances, participantCount)) return;
+    seenStates.add(stateKey);
+    completeStates.push({
+      transfers: state.transfers,
+      meta: {
+        fillerValueTotal: state.totalCompValue,
+        fillerAssetCount: state.transfers.length,
+        fillerPairCount: state.pairSet.size,
+        senderSplitCount: [...state.receiverBySender.values()].reduce((sum, receiverIds) => sum + Math.max(0, receiverIds.size - 1), 0),
+        receiverSplitCount: [...state.senderByReceiver.values()].reduce((sum, senderIds) => sum + Math.max(0, senderIds.size - 1), 0),
+      },
+      stateScore: scoreMultiTeamCompensationState(state, baseBalances, participantCount),
+    });
+  }
+
+  maybeCaptureState(initialState);
+
+  for (let depth = 0; depth < maxCompAssets; depth += 1) {
+    const nextStates = [];
+
+    beam.forEach((beamState) => {
+      const moveCandidates = buildMultiTeamCompensationMoves({
+        tradeState,
+        beamState,
+        baseBalances,
+        candidatePools,
+        basePairSet,
+        meRoster,
+        values,
+      });
+
+      moveCandidates.forEach((move) => {
+        const nextState = applyMultiTeamCompensationMove(beamState, move);
+        nextStates.push(nextState);
+        maybeCaptureState(nextState);
+      });
+    });
+
+    if (nextStates.length === 0) break;
+
+    const dedupedStates = [];
+    const seenBeamKeys = new Set();
+    nextStates
+      .sort((left, right) => scoreMultiTeamCompensationState(left, baseBalances, participantCount) - scoreMultiTeamCompensationState(right, baseBalances, participantCount))
+      .forEach((state) => {
+        const key = createMultiTeamCompensationStateKey(state);
+        if (seenBeamKeys.has(key)) return;
+        seenBeamKeys.add(key);
+        dedupedStates.push(state);
+      });
+    beam = dedupedStates.slice(0, beamWidth);
+  }
+
+  if (completeStates.length === 0) {
+    return dedupeMultiTeamCompensationPlans(exploredStates)
+      .sort((left, right) => left.stateScore - right.stateScore)
+      .slice(0, Math.max(MULTI_TEAM_VARIANT_COUNT, maxResults * 2));
+  }
+
+  return dedupeMultiTeamCompensationPlans(completeStates)
+    .sort((left, right) => left.stateScore - right.stateScore)
+    .slice(0, Math.max(MULTI_TEAM_VARIANT_COUNT, maxResults * 3));
+}
+
+function dedupeMultiTeamCompensationPlans(plans) {
+  const seen = new Set();
+  const deduped = [];
+
+  plans.forEach((plan) => {
+    const key = plan.transfers
+      .map((transfer) => `${transfer.fromRosterId}>${transfer.toRosterId}:${transfer.asset.assetId}`)
+      .sort()
+      .join("|");
+    if (seen.has(key)) return;
+    seen.add(key);
+    deduped.push(plan);
+  });
+
+  return deduped;
+}
+
+function buildMultiTeamCompensationCandidatePools({
+  tradeState,
+  meRoster,
+  values,
+  tradeLab,
+}) {
+  const pools = new Map();
+
+  tradeState.stateByRosterId.forEach((participantState, rosterId) => {
+    const candidates = buildAvailableMultiTeamFillerAssets({
+      participantState,
+      meRoster,
+      values,
+      tradeLab,
+      variantIndex: 0,
+    }).slice(0, MULTI_TEAM_COMPENSATION_ASSET_POOL_LIMIT);
+    pools.set(rosterId, candidates);
+  });
+
+  return pools;
+}
+
+function buildMultiTeamCompensationMoves({
+  tradeState,
+  beamState,
+  baseBalances,
+  candidatePools,
+  basePairSet,
+  meRoster,
+  values,
+}) {
+  const donors = [...beamState.balanceByRosterId.entries()]
+    .filter(([, balance]) => balance < -MULTI_TEAM_COMPENSATION_TOLERANCE)
+    .sort((left, right) => left[1] - right[1])
+    .slice(0, MULTI_TEAM_COMPENSATION_DONOR_LIMIT);
+  const recipients = [...beamState.balanceByRosterId.entries()]
+    .filter(([, balance]) => balance > MULTI_TEAM_COMPENSATION_TOLERANCE)
+    .sort((left, right) => right[1] - left[1])
+    .slice(0, MULTI_TEAM_COMPENSATION_RECIPIENT_LIMIT);
+  const moveCandidates = [];
+
+  donors.forEach(([fromRosterId, donorBalance]) => {
+    const participantState = tradeState.stateByRosterId.get(fromRosterId);
+    const donorNeed = Math.abs(donorBalance);
+    const assets = (candidatePools.get(fromRosterId) || []).filter((asset) => !beamState.usedAssetIds.has(asset.assetId));
+    assets.forEach((asset) => {
+      const assetValue = getAssetValue(asset, values);
+      if (!Number.isFinite(assetValue) || assetValue <= 0) return;
+
+      recipients.forEach(([toRosterId, recipientBalance]) => {
+        if (toRosterId === fromRosterId) return;
+
+        const moveScore = scoreMultiTeamCompensationMove({
+          asset,
+          assetValue,
+          participantState,
+          fromRosterId,
+          toRosterId,
+          donorBalance,
+          donorNeed,
+          recipientBalance,
+          beamState,
+          baseBalances,
+          basePairSet,
+          meRoster,
+        });
+        if (!Number.isFinite(moveScore)) return;
+
+        moveCandidates.push({
+          fromRosterId,
+          toRosterId,
+          asset,
+          assetValue,
+          score: moveScore,
+        });
+      });
+    });
+  });
+
+  return moveCandidates
+    .sort((left, right) => left.score - right.score)
+    .slice(0, MULTI_TEAM_COMPENSATION_BRANCH_LIMIT);
+}
+
+function scoreMultiTeamCompensationMove({
+  asset,
+  assetValue,
+  participantState,
+  fromRosterId,
+  toRosterId,
+  donorBalance,
+  donorNeed,
+  recipientBalance,
+  beamState,
+  baseBalances,
+  basePairSet,
+  meRoster,
+}) {
+  const pairKey = `${fromRosterId}->${toRosterId}`;
+  const existingPair = basePairSet.has(pairKey) || beamState.pairSet.has(pairKey);
+  const donorAfter = donorBalance + assetValue;
+  const recipientAfter = recipientBalance - assetValue;
+  const donorOvershoot = Math.max(0, donorAfter);
+  const recipientOvershoot = Math.max(0, -recipientAfter);
+  const donorTolerance = Math.max(MULTI_TEAM_MAX_FILLER_OVERSHOOT_BASE, donorNeed * 0.8);
+  const recipientTolerance = Math.max(MULTI_TEAM_MAX_FILLER_OVERSHOOT_BASE, recipientBalance * 0.72);
+
+  if (donorOvershoot > donorTolerance) return Number.POSITIVE_INFINITY;
+  if (recipientOvershoot > recipientTolerance) return Number.POSITIVE_INFINITY;
+
+  const senderTargets = beamState.receiverBySender.get(fromRosterId) || new Set();
+  const recipientSources = beamState.senderByReceiver.get(toRosterId) || new Set();
+  const isMyRoster = fromRosterId === meRoster.rosterId;
+  const corePenalty = participantState.coreAssetIds.has(asset.assetId) ? (isMyRoster ? 980 : 460) : 0;
+  const selectedBonus = isMyRoster && state.selectedOutgoingAssetIds.has(asset.assetId) ? -210 : 0;
+  const closenessPenalty = Math.abs(assetValue - Math.min(Math.abs(donorBalance), recipientBalance));
+  const lanePenalty = existingPair ? -120 : 90;
+  const senderSplitPenalty = senderTargets.size > 0 && !senderTargets.has(toRosterId) ? 170 : 0;
+  const receiverSplitPenalty = recipientSources.size > 0 && !recipientSources.has(fromRosterId) ? 140 : 0;
+  const donorFlipPenalty = Math.max(0, donorAfter) * 1.8;
+  const recipientFlipPenalty = Math.max(0, -recipientAfter) * 2.3;
+  const valuePenalty = assetValue * 0.72;
+  const improvementBonus = (Math.min(Math.abs(donorBalance), assetValue) + Math.min(recipientBalance, assetValue)) * 1.25;
+  const roleFlipPenalty = (
+    (baseBalances.get(fromRosterId) < 0 && donorAfter > MULTI_TEAM_COMPENSATION_TOLERANCE ? donorAfter * 0.75 : 0)
+    + (baseBalances.get(toRosterId) > 0 && recipientAfter < -MULTI_TEAM_COMPENSATION_TOLERANCE ? Math.abs(recipientAfter) * 1.1 : 0)
+  );
+
+  return (
+    closenessPenalty
+    + valuePenalty
+    + lanePenalty
+    + senderSplitPenalty
+    + receiverSplitPenalty
+    + corePenalty
+    + donorFlipPenalty
+    + recipientFlipPenalty
+    + roleFlipPenalty
+    + selectedBonus
+    - improvementBonus
+  );
+}
+
+function applyMultiTeamCompensationMove(beamState, move) {
+  const nextBalances = new Map(beamState.balanceByRosterId);
+  nextBalances.set(move.fromRosterId, nextBalances.get(move.fromRosterId) + move.assetValue);
+  nextBalances.set(move.toRosterId, nextBalances.get(move.toRosterId) - move.assetValue);
+
+  const nextUsedAssetIds = new Set(beamState.usedAssetIds);
+  nextUsedAssetIds.add(move.asset.assetId);
+
+  const nextPairSet = new Set(beamState.pairSet);
+  nextPairSet.add(`${move.fromRosterId}->${move.toRosterId}`);
+
+  const nextReceiverBySender = cloneMapOfSets(beamState.receiverBySender);
+  if (!nextReceiverBySender.has(move.fromRosterId)) nextReceiverBySender.set(move.fromRosterId, new Set());
+  nextReceiverBySender.get(move.fromRosterId).add(move.toRosterId);
+
+  const nextSenderByReceiver = cloneMapOfSets(beamState.senderByReceiver);
+  if (!nextSenderByReceiver.has(move.toRosterId)) nextSenderByReceiver.set(move.toRosterId, new Set());
+  nextSenderByReceiver.get(move.toRosterId).add(move.fromRosterId);
+
+  return {
+    transfers: [...beamState.transfers, {
+      fromRosterId: move.fromRosterId,
+      toRosterId: move.toRosterId,
+      asset: move.asset,
+    }],
+    balanceByRosterId: nextBalances,
+    usedAssetIds: nextUsedAssetIds,
+    pairSet: nextPairSet,
+    receiverBySender: nextReceiverBySender,
+    senderByReceiver: nextSenderByReceiver,
+    totalCompValue: beamState.totalCompValue + move.assetValue,
+    corePenalty: beamState.corePenalty,
+  };
+}
+
+function isMultiTeamCompensationStateViable(state, baseBalances, participantCount) {
+  const tolerance = getMultiTeamCompensationTolerance(participantCount);
+  let largestPositive = 0;
+  let largestNegative = 0;
+  let roleFlipValue = 0;
+
+  state.balanceByRosterId.forEach((balance, rosterId) => {
+    if (balance > largestPositive) largestPositive = balance;
+    if (balance < largestNegative) largestNegative = balance;
+    const baseBalance = baseBalances.get(rosterId) || 0;
+    if (baseBalance < 0 && balance > tolerance) roleFlipValue += balance;
+    if (baseBalance > 0 && balance < -tolerance) roleFlipValue += Math.abs(balance);
+  });
+
+  return largestPositive <= tolerance && Math.abs(largestNegative) <= tolerance && roleFlipValue <= tolerance * 1.5;
+}
+
+function scoreMultiTeamCompensationState(state, baseBalances, participantCount) {
+  let positiveResidual = 0;
+  let negativeResidual = 0;
+  let roleFlipValue = 0;
+
+  state.balanceByRosterId.forEach((balance, rosterId) => {
+    if (balance > 0) positiveResidual += balance;
+    if (balance < 0) negativeResidual += Math.abs(balance);
+    const baseBalance = baseBalances.get(rosterId) || 0;
+    if (baseBalance < 0 && balance > 0) roleFlipValue += balance;
+    if (baseBalance > 0 && balance < 0) roleFlipValue += Math.abs(balance);
+  });
+
+  const senderSplitCount = [...state.receiverBySender.values()].reduce((sum, receiverIds) => sum + Math.max(0, receiverIds.size - 1), 0);
+  const receiverSplitCount = [...state.senderByReceiver.values()].reduce((sum, senderIds) => sum + Math.max(0, senderIds.size - 1), 0);
+  const tolerance = getMultiTeamCompensationTolerance(participantCount);
+  const unresolvedPenalty = Math.max(0, positiveResidual - tolerance * state.balanceByRosterId.size);
+
+  return (
+    unresolvedPenalty * 6.4
+    + roleFlipValue * 4.1
+    + state.totalCompValue * 1.15
+    + state.transfers.length * 165
+    + state.pairSet.size * 95
+    + senderSplitCount * 145
+    + receiverSplitCount * 130
+  );
+}
+
+function getMultiTeamCompensationTolerance(participantCount) {
+  return MULTI_TEAM_COMPENSATION_TOLERANCE + Math.max(0, participantCount - DEFAULT_MULTI_TEAM_COUNT) * 55;
+}
+
+function createMultiTeamCompensationStateKey(state) {
+  return state.transfers
+    .map((transfer) => `${transfer.fromRosterId}>${transfer.toRosterId}:${transfer.asset.assetId}`)
+    .sort()
+    .join("|");
+}
+
+function cloneMapOfSets(source) {
+  const clone = new Map();
+  source.forEach((value, key) => {
+    clone.set(key, new Set(value));
+  });
+  return clone;
 }
 
 function buildMultiTeamPackageVariants({
