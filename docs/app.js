@@ -33,6 +33,9 @@ const MULTI_TEAM_VALUE_STEP = 180;
 const MULTI_TEAM_VALUE_VARIANTS = 4;
 const MULTI_TEAM_FILLER_POOL_LIMIT = 12;
 const SHOP_COUNTERPARTY_POOL_LIMIT = 12;
+const MULTI_TEAM_BASE_FAIRNESS_BUFFER = 10;
+const MULTI_TEAM_PER_TEAM_FAIRNESS_BUFFER = 2;
+const MULTI_TEAM_VARIANT_COUNT = 8;
 const AUTOSELECT_MANAGER_BY_LEAGUE = {
   "1315165104303513600": "NikoSkiouris",
 };
@@ -1704,10 +1707,16 @@ function renderMultiTeamPartyCard(participant, values, meRosterId) {
   const adjustmentLabel = !participant.packageAdjustment
     ? "none"
     : `+${formatNumber(participant.packageAdjustment)} on ${participant.packageAdjustmentSide === "my" ? "what they send" : "what they receive"}`;
+  const receiveFromLabel = participant.receiveFromNames?.length
+    ? participant.receiveFromNames.join(", ")
+    : "trade partners";
+  const sendToLabel = participant.sendToNames?.length
+    ? participant.sendToNames.join(", ")
+    : "trade partners";
   return `
     <section class="multi-team-party-card ${isMe ? "you" : "other"}">
       <h4>${isMe ? "You" : participant.roster.manager.displayName}</h4>
-      <p class="muted small">${participant.receiveFromName} to ${participant.sendToName}</p>
+      <p class="muted small">${receiveFromLabel} to ${sendToLabel}</p>
       <div class="trade-body-grid">
         <section class="trade-side team-a">
           <div class="trade-side-heading">
@@ -2979,8 +2988,7 @@ function resolveCustomMultiTeamSetup() {
     return { ok: false, message: "One or more selected teams could not be resolved." };
   }
 
-  const ownerToRecipient = new Map();
-  const anchorAssetByOwner = new Map();
+  const anchorTransfers = [];
   const wantedAssetIds = new Set();
 
   for (const recipientRoster of participantRosters) {
@@ -2999,31 +3007,24 @@ function resolveCustomMultiTeamSetup() {
     if (ownerRoster.rosterId === recipientRoster.rosterId) {
       return { ok: false, message: `${recipientRoster.manager.displayName} cannot ask to receive an asset already on that roster.` };
     }
-    if (ownerToRecipient.has(ownerRoster.rosterId)) {
-      return { ok: false, message: "The custom builder needs one outgoing anchor asset from each team. Pick a different requested asset so the cycle stays clean." };
-    }
-
-    ownerToRecipient.set(ownerRoster.rosterId, recipientRoster.rosterId);
-    anchorAssetByOwner.set(ownerRoster.rosterId, findAssetOnRoster(ownerRoster, wantedAssetId));
     wantedAssetIds.add(wantedAssetId);
+    anchorTransfers.push({
+      fromRosterId: ownerRoster.rosterId,
+      toRosterId: recipientRoster.rosterId,
+      asset: findAssetOnRoster(ownerRoster, wantedAssetId),
+      isRequested: true,
+    });
   }
 
-  if (ownerToRecipient.size !== participantRosters.length) {
-    return { ok: false, message: "Each team needs to be both sending and receiving one anchor asset in the custom trade." };
-  }
-
-  const ownerSequence = buildOwnerSequenceFromRecipientMap(ownerToRecipient, meRoster.rosterId, participantRosters.length);
-  if (!ownerSequence) {
-    return { ok: false, message: "The requested assets do not form one full trade cycle yet. Make sure every team points to another team in the same loop." };
+  if (anchorTransfers.length !== participantRosters.length) {
+    return { ok: false, message: "Pick one requested asset for every team in the trade." };
   }
 
   return {
     ok: true,
     meRoster,
     participantRosters,
-    ownerToRecipient,
-    anchorAssetByOwner,
-    ownerSequence,
+    anchorTransfers,
   };
 }
 
@@ -3066,17 +3067,15 @@ function generateCustomMultiTeamIdeas({
     };
   }
 
-  const ideas = buildMultiTeamIdeasFromCycle({
+  const ideas = buildMultiTeamIdeasFromAnchors({
     meRoster,
     participantRosters: setup.participantRosters,
-    ownerToRecipient: setup.ownerToRecipient,
-    anchorAssetByOwner: setup.anchorAssetByOwner,
-    ownerSequence: setup.ownerSequence,
+    anchorTransfers: setup.anchorTransfers,
     values,
     fairnessPct,
     maxResults,
     tradeLab,
-    focusLabel: "custom cycle",
+    focusLabel: "custom build",
   });
 
   return {
@@ -3132,7 +3131,6 @@ function generateAutoMultiTeamIdeas({
   helperSets.forEach((helperSet) => {
     const participantRosters = [meRoster, ...helperSet, targetOwner];
     const ownerSequence = participantRosters.map((roster) => roster.rosterId);
-    const ownerToRecipient = buildCircularRecipientMap(ownerSequence);
     const anchorAssetByOwner = new Map([[targetOwner.rosterId, targetAsset]]);
     const usedAnchorIds = new Set([targetAsset.assetId]);
 
@@ -3162,13 +3160,18 @@ function generateAutoMultiTeamIdeas({
       usedAnchorIds.add(helperAnchor.assetId);
     }
 
+    const anchorTransfers = ownerSequence.map((ownerId, index) => ({
+      fromRosterId: ownerId,
+      toRosterId: ownerSequence[(index + 1) % ownerSequence.length],
+      asset: anchorAssetByOwner.get(ownerId),
+      isRequested: ownerId === targetOwner.rosterId,
+    })).filter((transfer) => transfer.asset);
+
     ideas.push(
-      ...buildMultiTeamIdeasFromCycle({
+      ...buildMultiTeamIdeasFromAnchors({
         meRoster,
         participantRosters,
-        ownerToRecipient,
-        anchorAssetByOwner,
-        ownerSequence,
+        anchorTransfers,
         values,
         fairnessPct,
         maxResults,
@@ -3193,6 +3196,372 @@ function generateAutoMultiTeamIdeas({
       ideas: dedupedIdeas,
     }],
   };
+}
+
+function buildMultiTeamIdeasFromAnchors({
+  meRoster,
+  participantRosters,
+  anchorTransfers,
+  values,
+  fairnessPct,
+  maxResults,
+  tradeLab,
+  focusLabel,
+}) {
+  const baseState = createMultiTeamTradeState({
+    meRoster,
+    participantRosters,
+    anchorTransfers,
+    values,
+  });
+  const ideas = [];
+
+  for (let variantIndex = 0; variantIndex < MULTI_TEAM_VARIANT_COUNT; variantIndex += 1) {
+    const variantState = cloneMultiTeamTradeState(baseState);
+    solveMultiTeamTradeState(variantState, { meRoster, values, tradeLab, variantIndex });
+    const finalizedIdea = finalizeMultiTeamTradeIdea({
+      tradeState: variantState,
+      meRoster,
+      values,
+      tradeLab,
+      fairnessPct,
+      focusLabel,
+    });
+    if (finalizedIdea) ideas.push(finalizedIdea);
+  }
+
+  return dedupeMultiTeamIdeas(ideas).sort((a, b) => compareMultiTeamIdeas(a, b)).slice(0, maxResults);
+}
+
+function createMultiTeamTradeState({ meRoster, participantRosters, anchorTransfers, values }) {
+  const stateByRosterId = new Map();
+
+  participantRosters.forEach((roster) => {
+    stateByRosterId.set(roster.rosterId, {
+      roster,
+      outgoingTransfers: [],
+      incomingTransfers: [],
+      coreAssetIds: getCoreAssetIdSet(roster, values),
+    });
+  });
+
+  anchorTransfers.forEach((transfer) => {
+    addMultiTeamTransfer(stateByRosterId, {
+      fromRosterId: transfer.fromRosterId,
+      toRosterId: transfer.toRosterId,
+      asset: transfer.asset,
+      kind: "anchor",
+      isRequested: Boolean(transfer.isRequested),
+    });
+  });
+
+  return {
+    meRosterId: meRoster.rosterId,
+    participantRosters,
+    stateByRosterId,
+  };
+}
+
+function cloneMultiTeamTradeState(baseState) {
+  const clonedMap = new Map();
+  baseState.stateByRosterId.forEach((participantState, rosterId) => {
+    clonedMap.set(rosterId, {
+      roster: participantState.roster,
+      outgoingTransfers: participantState.outgoingTransfers.map((transfer) => ({ ...transfer })),
+      incomingTransfers: participantState.incomingTransfers.map((transfer) => ({ ...transfer })),
+      coreAssetIds: new Set(participantState.coreAssetIds),
+    });
+  });
+
+  return {
+    meRosterId: baseState.meRosterId,
+    participantRosters: baseState.participantRosters,
+    stateByRosterId: clonedMap,
+  };
+}
+
+function addMultiTeamTransfer(stateByRosterId, { fromRosterId, toRosterId, asset, kind = "filler", isRequested = false }) {
+  if (!asset || fromRosterId == null || toRosterId == null || fromRosterId === toRosterId) return;
+
+  const senderState = stateByRosterId.get(fromRosterId);
+  const receiverState = stateByRosterId.get(toRosterId);
+  if (!senderState || !receiverState) return;
+
+  const transferRecord = {
+    asset,
+    fromRosterId,
+    toRosterId,
+    kind,
+    isRequested,
+  };
+  senderState.outgoingTransfers.push(transferRecord);
+  receiverState.incomingTransfers.push(transferRecord);
+}
+
+function getMultiTeamParticipantMetrics(tradeState, values) {
+  return [...tradeState.stateByRosterId.values()].map((participantState) => {
+    const outgoingAssets = participantState.outgoingTransfers.map((transfer) => transfer.asset);
+    const incomingAssets = participantState.incomingTransfers.map((transfer) => transfer.asset);
+    const outgoingValue = outgoingAssets.reduce((sum, asset) => sum + getAssetValue(asset, values), 0);
+    const incomingValue = incomingAssets.reduce((sum, asset) => sum + getAssetValue(asset, values), 0);
+    const needReceive = Math.max(0, outgoingValue - incomingValue);
+    const needSend = Math.max(0, incomingValue - outgoingValue);
+
+    return {
+      roster: participantState.roster,
+      outgoingAssets,
+      incomingAssets,
+      outgoingValue,
+      incomingValue,
+      needReceive,
+      needSend,
+    };
+  });
+}
+
+function solveMultiTeamTradeState(tradeState, { meRoster, values, tradeLab, variantIndex }) {
+  for (let iteration = 0; iteration < 80; iteration += 1) {
+    const participantMetrics = getMultiTeamParticipantMetrics(tradeState, values);
+    const receivers = participantMetrics
+      .filter((metric) => metric.needReceive > 140)
+      .sort((left, right) => {
+        if (variantIndex % 2 === 0) return right.needReceive - left.needReceive;
+        return left.needReceive - right.needReceive;
+      });
+    const debtors = participantMetrics
+      .filter((metric) => metric.needSend > 140)
+      .sort((left, right) => {
+        if (variantIndex % 3 === 0) return right.needSend - left.needSend;
+        return left.needSend - right.needSend;
+      });
+
+    if (receivers.length === 0 || debtors.length === 0) break;
+
+    const nextMove = selectBestMultiTeamFillerMove({
+      tradeState,
+      meRoster,
+      values,
+      tradeLab,
+      variantIndex,
+      receivers,
+      debtors,
+    });
+    if (!nextMove) break;
+
+    addMultiTeamTransfer(tradeState.stateByRosterId, {
+      fromRosterId: nextMove.fromRosterId,
+      toRosterId: nextMove.toRosterId,
+      asset: nextMove.asset,
+      kind: "filler",
+    });
+  }
+}
+
+function selectBestMultiTeamFillerMove({
+  tradeState,
+  meRoster,
+  values,
+  tradeLab,
+  variantIndex,
+  receivers,
+  debtors,
+}) {
+  const bestMoves = [];
+
+  debtors.forEach((debtorMetric) => {
+    const participantState = tradeState.stateByRosterId.get(debtorMetric.roster.rosterId);
+    const candidates = buildAvailableMultiTeamFillerAssets({
+      participantState,
+      meRoster,
+      values,
+      tradeLab,
+      variantIndex,
+    });
+    if (candidates.length === 0) return;
+
+    receivers
+      .filter((receiverMetric) => receiverMetric.roster.rosterId !== debtorMetric.roster.rosterId)
+      .forEach((receiverMetric) => {
+        candidates.forEach((candidateAsset) => {
+          const score = scoreMultiTeamFillerMove({
+            asset: candidateAsset,
+            debtorMetric,
+            receiverMetric,
+            participantState,
+            meRoster,
+            values,
+            tradeLab,
+            variantIndex,
+          });
+          if (!Number.isFinite(score)) return;
+          bestMoves.push({
+            fromRosterId: debtorMetric.roster.rosterId,
+            toRosterId: receiverMetric.roster.rosterId,
+            asset: candidateAsset,
+            score,
+          });
+        });
+      });
+  });
+
+  bestMoves.sort((left, right) => right.score - left.score);
+  return bestMoves[0] || null;
+}
+
+function buildAvailableMultiTeamFillerAssets({
+  participantState,
+  meRoster,
+  values,
+  tradeLab,
+  variantIndex,
+}) {
+  const sentAssetIds = new Set(participantState.outgoingTransfers.map((transfer) => transfer.asset.assetId));
+  const isMyRoster = participantState.roster.rosterId === meRoster.rosterId;
+
+  return participantState.roster.assets
+    .filter((asset) => Number.isFinite(getAssetValue(asset, values)))
+    .filter((asset) => !sentAssetIds.has(asset.assetId))
+    .filter((asset) => !isMyRoster || !state.excludedOutgoingAssetIds.has(asset.assetId))
+    .sort((left, right) => {
+      const leftScore = scoreMultiTeamAssetLiquidity(left, participantState, meRoster, values, tradeLab, variantIndex);
+      const rightScore = scoreMultiTeamAssetLiquidity(right, participantState, meRoster, values, tradeLab, variantIndex);
+      if (rightScore !== leftScore) return rightScore - leftScore;
+      return sortAssetsByValueDesc(left, right, values);
+    })
+    .slice(0, MULTI_TEAM_FILLER_POOL_LIMIT);
+}
+
+function scoreMultiTeamAssetLiquidity(asset, participantState, meRoster, values, tradeLab, variantIndex) {
+  const assetValue = getAssetValue(asset, values);
+  const isMyRoster = participantState.roster.rosterId === meRoster.rosterId;
+  let score = assetValue;
+
+  if (participantState.coreAssetIds.has(asset.assetId)) score -= isMyRoster ? 850 : 420;
+  if (isMyRoster && state.selectedOutgoingAssetIds.has(asset.assetId)) score += 280;
+  if (asset.assetType === "pick") score += tradeLab.teamState === "rebuilding" ? 90 : 35;
+  if (tradeLab.teamState === "contending" && isVeteranAsset(asset)) score += 55;
+  if (variantIndex % 3 === 1 && assetValue <= 2500) score += 40;
+  if (variantIndex % 3 === 2 && assetValue >= 2500) score += 40;
+
+  return score;
+}
+
+function scoreMultiTeamFillerMove({
+  asset,
+  debtorMetric,
+  receiverMetric,
+  participantState,
+  meRoster,
+  values,
+  tradeLab,
+  variantIndex,
+}) {
+  const assetValue = getAssetValue(asset, values);
+  const targetGap = Math.max(180, Math.min(debtorMetric.needSend, receiverMetric.needReceive));
+  const isMyRoster = participantState.roster.rosterId === meRoster.rosterId;
+  let score = 10000;
+
+  score -= Math.abs(assetValue - targetGap) * 1.35;
+  score -= Math.abs(assetValue - debtorMetric.needSend) * 0.35;
+  score -= Math.abs(assetValue - receiverMetric.needReceive) * 0.35;
+
+  if (participantState.coreAssetIds.has(asset.assetId)) score -= isMyRoster ? 900 : 440;
+  if (isMyRoster && state.selectedOutgoingAssetIds.has(asset.assetId)) score += 320;
+  if (asset.assetType === "pick") score += tradeLab.teamState === "rebuilding" ? 80 : 25;
+  if (tradeLab.teamState === "contending" && isVeteranAsset(asset)) score += 45;
+  if (variantIndex % 4 === 1 && assetValue <= targetGap * 1.08) score += 55;
+  if (variantIndex % 4 === 2 && assetValue >= targetGap * 0.92) score += 55;
+  if (variantIndex % 4 === 3 && receiverMetric.roster.rosterId === meRoster.rosterId) score += 45;
+
+  return score;
+}
+
+function finalizeMultiTeamTradeIdea({
+  tradeState,
+  meRoster,
+  values,
+  tradeLab,
+  fairnessPct,
+  focusLabel,
+}) {
+  const fairnessLimit = getMultiTeamFairnessLimit(fairnessPct, tradeLab, tradeState.participantRosters.length);
+  const globalMaxValue = getGlobalMaxPlayerValue(values);
+  const participants = [];
+
+  for (const participantState of tradeState.stateByRosterId.values()) {
+    const outgoingAssets = participantState.outgoingTransfers.map((transfer) => transfer.asset);
+    const incomingAssets = participantState.incomingTransfers.map((transfer) => transfer.asset);
+    if (outgoingAssets.length === 0 || incomingAssets.length === 0) return null;
+
+    const packageResult = calculatePackageAdjustment({
+      myValues: outgoingAssets.map((asset) => getAssetValue(asset, values)),
+      theirValues: incomingAssets.map((asset) => getAssetValue(asset, values)),
+      globalMaxValue,
+    });
+    const pctDiff = Number(calculatePctDiff(packageResult.myAdjustedValue, packageResult.theirAdjustedValue).toFixed(2));
+    if (pctDiff > fairnessLimit) return null;
+
+    const sendToNames = [...new Set(
+      participantState.outgoingTransfers
+        .map((transfer) => findRosterById(transfer.toRosterId)?.manager.displayName)
+        .filter(Boolean)
+    )];
+    const receiveFromNames = [...new Set(
+      participantState.incomingTransfers
+        .map((transfer) => findRosterById(transfer.fromRosterId)?.manager.displayName)
+        .filter(Boolean)
+    )];
+
+    participants.push({
+      roster: participantState.roster,
+      sendToNames,
+      receiveFromNames,
+      outgoingAssets,
+      incomingAssets,
+      outgoingAdjustedValue: packageResult.myAdjustedValue,
+      incomingAdjustedValue: packageResult.theirAdjustedValue,
+      packageAdjustment: packageResult.packageAdjustment,
+      packageAdjustmentSide: packageResult.packageAdjustmentSide || null,
+      pctDiff,
+      requestedIncomingCount: participantState.incomingTransfers.filter((transfer) => transfer.isRequested).length,
+    });
+  }
+
+  const maxPctDiff = Number(Math.max(...participants.map((participant) => participant.pctDiff)).toFixed(2));
+  const avgPctDiff = Number((
+    participants.reduce((sum, participant) => sum + participant.pctDiff, 0) / participants.length
+  ).toFixed(2));
+  const totalAssetsMoved = participants.reduce((sum, participant) => sum + participant.outgoingAssets.length, 0);
+  const requestedCount = participants.reduce((sum, participant) => sum + participant.requestedIncomingCount, 0);
+  const labScore = clamp(
+    Math.round(93 - maxPctDiff * 1.05 - Math.max(0, totalAssetsMoved - participants.length) * 1.2 + requestedCount * 1.5),
+    1,
+    99
+  );
+
+  return {
+    teamCount: tradeState.participantRosters.length,
+    commonValue: Math.round(
+      participants.reduce((sum, participant) => sum + participant.incomingAdjustedValue, 0) / participants.length
+    ),
+    maxPctDiff,
+    avgPctDiff,
+    labScore,
+    meRosterId: meRoster.rosterId,
+    participants,
+    tags: [
+      `${tradeState.participantRosters.length} Team`,
+      requestedCount >= tradeState.participantRosters.length ? "Requested Anchors" : "Open Solver",
+      maxPctDiff <= fairnessLimit * 0.55 ? "Tight Value" : "Flexible Value",
+    ],
+    summary: buildMultiTeamSummary(participants, focusLabel),
+  };
+}
+
+function getMultiTeamFairnessLimit(fairnessPct, tradeLab, participantCount) {
+  return getEffectiveFairnessPct(fairnessPct, tradeLab.tradeVibe)
+    + MULTI_TEAM_BASE_FAIRNESS_BUFFER
+    + Math.max(0, participantCount - DEFAULT_MULTI_TEAM_COUNT) * MULTI_TEAM_PER_TEAM_FAIRNESS_BUFFER;
 }
 
 function buildCircularRecipientMap(ownerSequence) {
@@ -3454,7 +3823,12 @@ function buildSupplementAssetPool({
 }
 
 function buildMultiTeamSummary(participants, focusLabel) {
-  const flow = participants.map((participant) => `${participant.roster.manager.displayName} to ${participant.sendToName}`).join(" • ");
+  const flow = participants
+    .map((participant) => {
+      const sendTargets = participant.sendToNames?.length ? participant.sendToNames.join(", ") : "the field";
+      return `${participant.roster.manager.displayName} to ${sendTargets}`;
+    })
+    .join(" • ");
   return `Route centered on ${focusLabel}: ${flow}.`;
 }
 
