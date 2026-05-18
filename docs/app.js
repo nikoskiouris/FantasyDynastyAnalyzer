@@ -1722,9 +1722,11 @@ function renderMultiTeamCard(idea, index, values) {
 
 function renderMultiTeamPartyCard(participant, values, meRosterId) {
   const isMe = participant.roster.rosterId === meRosterId;
-  const adjustmentLabel = !participant.packageAdjustment
-    ? "none"
-    : `+${formatNumber(participant.packageAdjustment)} on ${participant.packageAdjustmentSide === "my" ? "what they send" : "what they receive"}`;
+  const bridgeGapLabel = participant.netValueDelta === 0
+    ? "even on raw value"
+    : participant.netValueDelta > 0
+      ? `receive +${formatNumber(participant.netValueDelta)} raw`
+      : `send +${formatNumber(Math.abs(participant.netValueDelta))} raw`;
   const receiveFromLabel = participant.receiveFromNames?.length
     ? participant.receiveFromNames.join(", ")
     : "trade partners";
@@ -1753,12 +1755,12 @@ function renderMultiTeamPartyCard(participant, values, meRosterId) {
       </div>
       <div class="trade-metrics">
         <div class="trade-metric">
-          <strong>KTC balance</strong>
+          <strong>Raw balance</strong>
           send ${formatNumber(participant.outgoingAdjustedValue)} vs receive ${formatNumber(participant.incomingAdjustedValue)} (${participant.pctDiff}% diff)
         </div>
         <div class="trade-metric">
-          <strong>Package adjustment</strong>
-          ${adjustmentLabel}
+          <strong>Bridge gap</strong>
+          ${bridgeGapLabel}
         </div>
       </div>
     </section>
@@ -3498,7 +3500,6 @@ function finalizeMultiTeamTradeIdea({
   assignmentMeta = null,
 }) {
   const fairnessLimit = getMultiTeamFairnessLimit(fairnessPct, tradeLab, tradeState.participantRosters.length);
-  const globalMaxValue = getGlobalMaxPlayerValue(values);
   const participants = [];
 
   for (const participantState of tradeState.stateByRosterId.values()) {
@@ -3506,12 +3507,15 @@ function finalizeMultiTeamTradeIdea({
     const incomingAssets = participantState.incomingTransfers.map((transfer) => transfer.asset);
     if (outgoingAssets.length === 0 || incomingAssets.length === 0) return null;
 
-    const packageResult = calculatePackageAdjustment({
-      myValues: outgoingAssets.map((asset) => getAssetValue(asset, values)),
-      theirValues: incomingAssets.map((asset) => getAssetValue(asset, values)),
-      globalMaxValue,
+    const tradeShape = summarizeMultiTeamParticipantShape(participantState, values);
+    const fairnessMetrics = calculateMultiTeamParticipantFairness({
+      outgoingAssets,
+      incomingAssets,
+      values,
+      tradeLab,
+      tradeShape,
     });
-    const pctDiff = Number(calculatePctDiff(packageResult.myAdjustedValue, packageResult.theirAdjustedValue).toFixed(2));
+    const pctDiff = fairnessMetrics.pctDiff;
     if (pctDiff > fairnessLimit) return null;
 
     const sendToNames = [...new Set(
@@ -3524,7 +3528,6 @@ function finalizeMultiTeamTradeIdea({
         .map((transfer) => findRosterById(transfer.fromRosterId)?.manager.displayName)
         .filter(Boolean)
     )];
-    const tradeShape = summarizeMultiTeamParticipantShape(participantState, values);
 
     participants.push({
       roster: participantState.roster,
@@ -3532,10 +3535,12 @@ function finalizeMultiTeamTradeIdea({
       receiveFromNames,
       outgoingAssets,
       incomingAssets,
-      outgoingAdjustedValue: packageResult.myAdjustedValue,
-      incomingAdjustedValue: packageResult.theirAdjustedValue,
-      packageAdjustment: packageResult.packageAdjustment,
-      packageAdjustmentSide: packageResult.packageAdjustmentSide || null,
+      outgoingAdjustedValue: fairnessMetrics.outgoingRawValue,
+      incomingAdjustedValue: fairnessMetrics.incomingRawValue,
+      packageAdjustment: 0,
+      packageAdjustmentSide: null,
+      netValueDelta: fairnessMetrics.netValueDelta,
+      marketPctDiff: fairnessMetrics.marketPctDiff,
       pctDiff,
       requestedIncomingCount: tradeShape.requestedIncomingCount,
       tradeShape,
@@ -3642,6 +3647,39 @@ function getMultiTeamFairnessLimit(fairnessPct, tradeLab, participantCount) {
     + Math.max(0, participantCount - DEFAULT_MULTI_TEAM_COUNT) * MULTI_TEAM_PER_TEAM_FAIRNESS_BUFFER;
 }
 
+function calculateMultiTeamParticipantFairness({
+  outgoingAssets,
+  incomingAssets,
+  values,
+  tradeLab,
+  tradeShape,
+}) {
+  const outgoingRawValue = outgoingAssets.reduce((sum, asset) => sum + getAssetValue(asset, values), 0);
+  const incomingRawValue = incomingAssets.reduce((sum, asset) => sum + getAssetValue(asset, values), 0);
+  const outgoingMarketValue = calculatePerceivedPackageValue(outgoingAssets, values, tradeLab);
+  const incomingMarketValue = calculatePerceivedPackageValue(incomingAssets, values, tradeLab);
+  const rawPctDiff = calculatePctDiff(outgoingRawValue, incomingRawValue);
+  const marketPctDiff = calculatePctDiff(outgoingMarketValue, incomingMarketValue);
+  const marketGapWeight = tradeShape.role === "level-up"
+    ? 0.16
+    : tradeShape.role === "break-down"
+      ? 0.22
+      : tradeShape.role === "bridge"
+        ? 0.28
+        : 0.24;
+
+  return {
+    outgoingRawValue,
+    incomingRawValue,
+    outgoingMarketValue,
+    incomingMarketValue,
+    rawPctDiff: Number(rawPctDiff.toFixed(2)),
+    marketPctDiff: Number(marketPctDiff.toFixed(2)),
+    pctDiff: Number((rawPctDiff + Math.max(0, marketPctDiff - rawPctDiff) * marketGapWeight).toFixed(2)),
+    netValueDelta: Math.round(incomingRawValue - outgoingRawValue),
+  };
+}
+
 function participantStateHasAssetOfKind(participantState, assetId, kind) {
   if (!participantState) return false;
   return participantState.outgoingTransfers.some((transfer) => transfer.asset.assetId === assetId && transfer.kind === kind);
@@ -3734,8 +3772,8 @@ function evaluateMultiTeamParticipantShape({
     if (incomingAssetCount > maxAssets || tradeShape.incomingFillerAssetCount > 3 + (participantCount >= 5 ? 1 : 0)) {
       return { ok: false, scorePenalty: 0 };
     }
-    if (incomingAssetCount >= 4 && topTwoShare < 0.72) return { ok: false, scorePenalty: 0 };
-    scorePenalty += Math.max(0, incomingAssetCount - 3) * 2.2 + Math.max(0, 0.78 - topTwoShare) * 22;
+    if (incomingAssetCount >= 4 && topTwoShare < 0.66) return { ok: false, scorePenalty: 0 };
+    scorePenalty += Math.max(0, incomingAssetCount - 3) * 2.2 + Math.max(0, 0.74 - topTwoShare) * 18;
   } else {
     const bridgeGap = Math.abs(tradeShape.incomingValue - tradeShape.outgoingValue);
     const maxBridgeGap = Math.max(1000, Math.max(tradeShape.incomingValue, tradeShape.outgoingValue) * 0.22 * loosenessFactor);
