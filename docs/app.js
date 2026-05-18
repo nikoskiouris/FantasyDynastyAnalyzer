@@ -36,6 +36,18 @@ const SHOP_COUNTERPARTY_POOL_LIMIT = 12;
 const MULTI_TEAM_BASE_FAIRNESS_BUFFER = 10;
 const MULTI_TEAM_PER_TEAM_FAIRNESS_BUFFER = 2;
 const MULTI_TEAM_VARIANT_COUNT = 8;
+const MULTI_TEAM_SENDER_PACKAGE_OPTION_LIMIT = 6;
+const MULTI_TEAM_MAX_FILLER_PAIRS_PER_ASSET = 3;
+const MULTI_TEAM_MAX_FILLER_RATIO_BASE = 0.52;
+const MULTI_TEAM_MAX_FILLER_RATIO_STEP = 0.04;
+const MULTI_TEAM_MAX_FILLER_OVERSHOOT_BASE = 650;
+const MULTI_TEAM_MAX_UNREQUESTED_ANCHOR_RATIO_BASE = 0.82;
+const MULTI_TEAM_MAX_UNREQUESTED_ANCHOR_RATIO_STEP = 0.18;
+const MULTI_TEAM_MAX_FILLER_OVERAGE_RATIO_BASE = 0.18;
+const MULTI_TEAM_MAX_FILLER_OVERAGE_RATIO_STEP = 0.05;
+const AUTO_MULTI_TEAM_MY_ANCHOR_CANDIDATE_LIMIT = 3;
+const AUTO_MULTI_TEAM_HELPER_ANCHOR_CANDIDATE_LIMIT = 2;
+const AUTO_MULTI_TEAM_HELPER_ANCHOR_CAP_SHARE = 0.68;
 const AUTOSELECT_MANAGER_BY_LEAGUE = {
   "1315165104303513600": "NikoSkiouris",
 };
@@ -1688,7 +1700,7 @@ function renderMultiTeamCard(idea, index, values) {
       <div class="multi-team-card-header">
         <div>
           <h3>Idea ${index + 1}</h3>
-          <p class="muted small">${idea.teamCount} teams • max ${idea.maxPctDiff}% diff • common value ${formatNumber(idea.commonValue)}</p>
+          <p class="muted small">${idea.teamCount} teams • max ${idea.maxPctDiff}% diff • added value ${formatNumber(idea.extraMovedValueTotal || 0)} • common value ${formatNumber(idea.commonValue)}</p>
         </div>
         <div class="participant-pill-row">
           ${idea.tags.map((tag) => `<span class="participant-pill">${tag}</span>`).join("")}
@@ -3129,56 +3141,27 @@ function generateAutoMultiTeamIdeas({
   const ideas = [];
 
   helperSets.forEach((helperSet) => {
-    const participantRosters = [meRoster, ...helperSet, targetOwner];
-    const ownerSequence = participantRosters.map((roster) => roster.rosterId);
-    const anchorAssetByOwner = new Map([[targetOwner.rosterId, targetAsset]]);
-    const usedAnchorIds = new Set([targetAsset.assetId]);
-
-    const myAnchor = pickAutoMultiTeamAnchorAsset({
-      roster: meRoster,
-      targetValue: getAssetValue(targetAsset, values),
+    buildAutoMultiTeamAnchorPlans({
+      meRoster,
+      helperSet,
+      targetOwner,
+      targetAsset,
       values,
       tradeTier: getTradeTier(),
-      usedAssetIds: usedAnchorIds,
-      protectRosterCore: true,
-      isMyRoster: true,
+    }).forEach((plan) => {
+      ideas.push(
+        ...buildMultiTeamIdeasFromAnchors({
+          meRoster,
+          participantRosters: plan.participantRosters,
+          anchorTransfers: plan.anchorTransfers,
+          values,
+          fairnessPct,
+          maxResults,
+          tradeLab,
+          focusLabel: targetAsset.name,
+        })
+      );
     });
-    if (!myAnchor) return;
-    anchorAssetByOwner.set(meRoster.rosterId, myAnchor);
-    usedAnchorIds.add(myAnchor.assetId);
-
-    for (const helperRoster of helperSet) {
-      const helperAnchor = pickAutoMultiTeamAnchorAsset({
-        roster: helperRoster,
-        targetValue: getAssetValue(targetAsset, values),
-        values,
-        tradeTier: getTradeTier(),
-        usedAssetIds: usedAnchorIds,
-      });
-      if (!helperAnchor) return;
-      anchorAssetByOwner.set(helperRoster.rosterId, helperAnchor);
-      usedAnchorIds.add(helperAnchor.assetId);
-    }
-
-    const anchorTransfers = ownerSequence.map((ownerId, index) => ({
-      fromRosterId: ownerId,
-      toRosterId: ownerSequence[(index + 1) % ownerSequence.length],
-      asset: anchorAssetByOwner.get(ownerId),
-      isRequested: ownerId === targetOwner.rosterId,
-    })).filter((transfer) => transfer.asset);
-
-    ideas.push(
-      ...buildMultiTeamIdeasFromAnchors({
-        meRoster,
-        participantRosters,
-        anchorTransfers,
-        values,
-        fairnessPct,
-        maxResults,
-        tradeLab,
-        focusLabel: targetAsset.name,
-      })
-    );
   });
 
   const dedupedIdeas = dedupeMultiTeamIdeas(ideas)
@@ -3214,11 +3197,37 @@ function buildMultiTeamIdeasFromAnchors({
     anchorTransfers,
     values,
   });
+  const balanceContext = buildMultiTeamBalanceContext(baseState, values);
+  if (!balanceContext) return [];
+
+  const packageVariants = buildMultiTeamPackageVariants({
+    tradeState: baseState,
+    balanceContext,
+    meRoster,
+    values,
+    tradeLab,
+  });
   const ideas = [];
 
-  for (let variantIndex = 0; variantIndex < MULTI_TEAM_VARIANT_COUNT; variantIndex += 1) {
+  for (const packageVariant of packageVariants) {
+    const fillerAssignment = assignMultiTeamFillers({
+      tradeState: baseState,
+      balanceContext,
+      packageVariant,
+      values,
+    });
+    if (!fillerAssignment) continue;
+
     const variantState = cloneMultiTeamTradeState(baseState);
-    solveMultiTeamTradeState(variantState, { meRoster, values, tradeLab, variantIndex });
+    fillerAssignment.transfers.forEach((transfer) => {
+      addMultiTeamTransfer(variantState.stateByRosterId, {
+        fromRosterId: transfer.fromRosterId,
+        toRosterId: transfer.toRosterId,
+        asset: transfer.asset,
+        kind: "filler",
+      });
+    });
+
     const finalizedIdea = finalizeMultiTeamTradeIdea({
       tradeState: variantState,
       meRoster,
@@ -3226,6 +3235,8 @@ function buildMultiTeamIdeasFromAnchors({
       tradeLab,
       fairnessPct,
       focusLabel,
+      balanceContext,
+      assignmentMeta: fillerAssignment.meta,
     });
     if (finalizedIdea) ideas.push(finalizedIdea);
   }
@@ -3483,6 +3494,8 @@ function finalizeMultiTeamTradeIdea({
   tradeLab,
   fairnessPct,
   focusLabel,
+  balanceContext = null,
+  assignmentMeta = null,
 }) {
   const fairnessLimit = getMultiTeamFairnessLimit(fairnessPct, tradeLab, tradeState.participantRosters.length);
   const globalMaxValue = getGlobalMaxPlayerValue(values);
@@ -3511,6 +3524,7 @@ function finalizeMultiTeamTradeIdea({
         .map((transfer) => findRosterById(transfer.fromRosterId)?.manager.displayName)
         .filter(Boolean)
     )];
+    const tradeShape = summarizeMultiTeamParticipantShape(participantState, values);
 
     participants.push({
       roster: participantState.roster,
@@ -3523,7 +3537,8 @@ function finalizeMultiTeamTradeIdea({
       packageAdjustment: packageResult.packageAdjustment,
       packageAdjustmentSide: packageResult.packageAdjustmentSide || null,
       pctDiff,
-      requestedIncomingCount: participantState.incomingTransfers.filter((transfer) => transfer.isRequested).length,
+      requestedIncomingCount: tradeShape.requestedIncomingCount,
+      tradeShape,
     });
   }
 
@@ -3533,8 +3548,62 @@ function finalizeMultiTeamTradeIdea({
   ).toFixed(2));
   const totalAssetsMoved = participants.reduce((sum, participant) => sum + participant.outgoingAssets.length, 0);
   const requestedCount = participants.reduce((sum, participant) => sum + participant.requestedIncomingCount, 0);
+  const fillerValueTotal = assignmentMeta?.fillerValueTotal ?? 0;
+  const fillerAssetCount = assignmentMeta?.fillerAssetCount ?? 0;
+  const fillerPairCount = assignmentMeta?.fillerPairCount ?? 0;
+  const senderSplitCount = assignmentMeta?.senderSplitCount ?? 0;
+  const receiverSplitCount = assignmentMeta?.receiverSplitCount ?? 0;
+  const anchorValueTotal = balanceContext?.anchorValueTotal
+    ?? participants.reduce((sum, participant) => {
+      return sum + participant.outgoingAssets
+        .filter((asset) => participantStateHasAssetOfKind(tradeState.stateByRosterId.get(participant.roster.rosterId), asset.assetId, "anchor"))
+        .reduce((assetSum, asset) => assetSum + getAssetValue(asset, values), 0);
+    }, 0);
+  const requestedAnchorValueTotal = balanceContext?.requestedAnchorValueTotal ?? 0;
+  const unrequestedAnchorValueTotal = balanceContext?.unrequestedAnchorValueTotal ?? Math.max(0, anchorValueTotal - requestedAnchorValueTotal);
+  const requiredCompValue = balanceContext?.totalNeedReceive ?? 0;
+  const fillerOverageValue = Math.max(0, fillerValueTotal - requiredCompValue);
+  const extraMovedValueTotal = fillerValueTotal + unrequestedAnchorValueTotal;
+  const fillerOverageRatio = requiredCompValue > 0 ? fillerOverageValue / requiredCompValue : 0;
+  const fillerRatio = anchorValueTotal > 0 ? fillerValueTotal / anchorValueTotal : 0;
+  const maxFillerRatio = getMultiTeamMaxFillerRatio(tradeState.participantRosters.length);
+  const maxAllowedFillerAssets = tradeState.participantRosters.length + Math.max(1, Math.floor(tradeState.participantRosters.length / 2));
+  const maxUnrequestedAnchorRatio = getMultiTeamMaxUnrequestedAnchorRatio(tradeState.participantRosters.length);
+  const maxFillerOverageRatio = getMultiTeamMaxFillerOverageRatio(tradeState.participantRosters.length);
+  const unrequestedAnchorRatio = requestedAnchorValueTotal > 0
+    ? unrequestedAnchorValueTotal / requestedAnchorValueTotal
+    : unrequestedAnchorValueTotal > 0 ? Number.POSITIVE_INFINITY : 0;
+  const participantShapePenalty = participants.reduce((sum, participant) => sum + evaluateMultiTeamParticipantShape({
+    tradeShape: participant.tradeShape,
+    participantCount: tradeState.participantRosters.length,
+  }).scorePenalty, 0);
+
+  if (fillerAssetCount > maxAllowedFillerAssets) return null;
+  if (fillerRatio > maxFillerRatio && fillerValueTotal > 1800) return null;
+  if (unrequestedAnchorRatio > maxUnrequestedAnchorRatio && unrequestedAnchorValueTotal > 1200) return null;
+  if (fillerOverageRatio > maxFillerOverageRatio && fillerOverageValue > 900) return null;
+  if (fillerPairCount > Math.max(2, tradeState.participantRosters.length - 1)) return null;
+  if (participants.some((participant) => !evaluateMultiTeamParticipantShape({
+    tradeShape: participant.tradeShape,
+    participantCount: tradeState.participantRosters.length,
+  }).ok)) return null;
+
   const labScore = clamp(
-    Math.round(93 - maxPctDiff * 1.05 - Math.max(0, totalAssetsMoved - participants.length) * 1.2 + requestedCount * 1.5),
+    Math.round(
+      96
+      - maxPctDiff * 0.95
+      - avgPctDiff * 0.45
+      - fillerRatio * 38
+      - unrequestedAnchorRatio * 28
+      - fillerOverageRatio * 24
+      - fillerAssetCount * 2.8
+      - fillerPairCount * 2.9
+      - senderSplitCount * 2.7
+      - receiverSplitCount * 2.4
+      - Math.max(0, totalAssetsMoved - participants.length) * 0.7
+      - participantShapePenalty
+      + requestedCount * 1.4
+    ),
     1,
     99
   );
@@ -3548,10 +3617,19 @@ function finalizeMultiTeamTradeIdea({
     avgPctDiff,
     labScore,
     meRosterId: meRoster.rosterId,
+    fillerValueTotal: Math.round(fillerValueTotal),
+    extraMovedValueTotal: Math.round(extraMovedValueTotal),
+    unrequestedAnchorValueTotal: Math.round(unrequestedAnchorValueTotal),
+    fillerOverageValue: Math.round(fillerOverageValue),
+    fillerAssetCount,
+    fillerPairCount,
+    fillerRatio: Number(fillerRatio.toFixed(3)),
+    unrequestedAnchorRatio: Number.isFinite(unrequestedAnchorRatio) ? Number(unrequestedAnchorRatio.toFixed(3)) : 99,
     participants,
     tags: [
       `${tradeState.participantRosters.length} Team`,
       requestedCount >= tradeState.participantRosters.length ? "Requested Anchors" : "Open Solver",
+      extraMovedValueTotal <= Math.max(1400, requestedAnchorValueTotal * 0.18) ? "Lean Structure" : extraMovedValueTotal <= Math.max(2600, requestedAnchorValueTotal * 0.34) ? "Controlled Structure" : "Heavy Structure",
       maxPctDiff <= fairnessLimit * 0.55 ? "Tight Value" : "Flexible Value",
     ],
     summary: buildMultiTeamSummary(participants, focusLabel),
@@ -3562,6 +3640,429 @@ function getMultiTeamFairnessLimit(fairnessPct, tradeLab, participantCount) {
   return getEffectiveFairnessPct(fairnessPct, tradeLab.tradeVibe)
     + MULTI_TEAM_BASE_FAIRNESS_BUFFER
     + Math.max(0, participantCount - DEFAULT_MULTI_TEAM_COUNT) * MULTI_TEAM_PER_TEAM_FAIRNESS_BUFFER;
+}
+
+function participantStateHasAssetOfKind(participantState, assetId, kind) {
+  if (!participantState) return false;
+  return participantState.outgoingTransfers.some((transfer) => transfer.asset.assetId === assetId && transfer.kind === kind);
+}
+
+function getMultiTeamMaxFillerRatio(participantCount) {
+  return MULTI_TEAM_MAX_FILLER_RATIO_BASE
+    + Math.max(0, participantCount - DEFAULT_MULTI_TEAM_COUNT) * MULTI_TEAM_MAX_FILLER_RATIO_STEP;
+}
+
+function getMultiTeamMaxUnrequestedAnchorRatio(participantCount) {
+  return MULTI_TEAM_MAX_UNREQUESTED_ANCHOR_RATIO_BASE
+    + Math.max(0, participantCount - DEFAULT_MULTI_TEAM_COUNT) * MULTI_TEAM_MAX_UNREQUESTED_ANCHOR_RATIO_STEP;
+}
+
+function getMultiTeamMaxFillerOverageRatio(participantCount) {
+  return MULTI_TEAM_MAX_FILLER_OVERAGE_RATIO_BASE
+    + Math.max(0, participantCount - DEFAULT_MULTI_TEAM_COUNT) * MULTI_TEAM_MAX_FILLER_OVERAGE_RATIO_STEP;
+}
+
+function summarizeMultiTeamParticipantShape(participantState, values) {
+  const outgoingTransfers = participantState.outgoingTransfers || [];
+  const incomingTransfers = participantState.incomingTransfers || [];
+  const outgoingValue = outgoingTransfers.reduce((sum, transfer) => sum + getAssetValue(transfer.asset, values), 0);
+  const incomingValue = incomingTransfers.reduce((sum, transfer) => sum + getAssetValue(transfer.asset, values), 0);
+  const outgoingAnchorValue = outgoingTransfers
+    .filter((transfer) => transfer.kind === "anchor")
+    .reduce((sum, transfer) => sum + getAssetValue(transfer.asset, values), 0);
+  const requestedIncomingTransfers = incomingTransfers.filter((transfer) => transfer.isRequested);
+  const requestedIncomingValue = requestedIncomingTransfers.reduce((sum, transfer) => sum + getAssetValue(transfer.asset, values), 0);
+  const incomingProfile = buildPackageProfile(incomingTransfers.map((transfer) => transfer.asset), values);
+  const role = inferMultiTeamParticipantRole({
+    outgoingAnchorValue,
+    requestedIncomingValue,
+    requestedIncomingCount: requestedIncomingTransfers.length,
+  });
+
+  return {
+    outgoingValue,
+    incomingValue,
+    outgoingAnchorValue,
+    outgoingFillerValue: Math.max(0, outgoingValue - outgoingAnchorValue),
+    requestedIncomingValue,
+    requestedIncomingCount: requestedIncomingTransfers.length,
+    incomingNonRequestedValue: Math.max(0, incomingValue - requestedIncomingValue),
+    incomingAssetCount: incomingTransfers.length,
+    outgoingAssetCount: outgoingTransfers.length,
+    incomingFillerAssetCount: incomingTransfers.filter((transfer) => transfer.kind === "filler").length,
+    outgoingFillerAssetCount: outgoingTransfers.filter((transfer) => transfer.kind === "filler").length,
+    incomingProfile,
+    role,
+  };
+}
+
+function inferMultiTeamParticipantRole({
+  outgoingAnchorValue,
+  requestedIncomingValue,
+  requestedIncomingCount,
+}) {
+  if (!requestedIncomingCount) return "bridge";
+  if (!outgoingAnchorValue || requestedIncomingValue >= outgoingAnchorValue * 1.08) return "level-up";
+  if (requestedIncomingValue <= outgoingAnchorValue * 0.82) return "break-down";
+  return "even";
+}
+
+function evaluateMultiTeamParticipantShape({
+  tradeShape,
+  participantCount,
+}) {
+  const loosenessFactor = 1 + Math.max(0, participantCount - DEFAULT_MULTI_TEAM_COUNT) * 0.12;
+  const incomingAssetCount = tradeShape.incomingAssetCount;
+  const outgoingAssetCount = tradeShape.outgoingAssetCount;
+  const extraIncomingValue = tradeShape.incomingNonRequestedValue;
+  const incomingProfile = tradeShape.incomingProfile;
+  let scorePenalty = 0;
+
+  if (tradeShape.role === "level-up") {
+    const maxBonusValue = Math.max(900, tradeShape.requestedIncomingValue * 0.18 * loosenessFactor);
+    if (extraIncomingValue > maxBonusValue) return { ok: false, scorePenalty: 0 };
+    if (incomingAssetCount > 3 || outgoingAssetCount > 4) return { ok: false, scorePenalty: 0 };
+    scorePenalty += extraIncomingValue / 220 + Math.max(0, incomingAssetCount - 2) * 2.8;
+  } else if (tradeShape.role === "even") {
+    const maxBonusValue = Math.max(1400, tradeShape.requestedIncomingValue * 0.38 * loosenessFactor);
+    if (extraIncomingValue > maxBonusValue) return { ok: false, scorePenalty: 0 };
+    if (incomingAssetCount > 3 + (participantCount >= 5 ? 1 : 0)) return { ok: false, scorePenalty: 0 };
+    scorePenalty += extraIncomingValue / 260 + Math.max(0, incomingAssetCount - 2) * 2.1;
+  } else if (tradeShape.role === "break-down") {
+    const maxAssets = 4 + (participantCount >= 5 ? 1 : 0);
+    const topTwoShare = incomingProfile.totalValue > 0 ? incomingProfile.topTwoValue / incomingProfile.totalValue : 1;
+    if (incomingAssetCount > maxAssets || tradeShape.incomingFillerAssetCount > 2 + (participantCount >= 5 ? 1 : 0)) {
+      return { ok: false, scorePenalty: 0 };
+    }
+    if (incomingAssetCount >= 4 && topTwoShare < 0.72) return { ok: false, scorePenalty: 0 };
+    scorePenalty += Math.max(0, incomingAssetCount - 3) * 2.2 + Math.max(0, 0.78 - topTwoShare) * 22;
+  } else {
+    const bridgeGap = Math.abs(tradeShape.incomingValue - tradeShape.outgoingValue);
+    const maxBridgeGap = Math.max(1000, Math.max(tradeShape.incomingValue, tradeShape.outgoingValue) * 0.22 * loosenessFactor);
+    const maxBridgeAssets = 3 + Math.ceil(Math.max(0, participantCount - DEFAULT_MULTI_TEAM_COUNT) / 2);
+    if (incomingAssetCount > maxBridgeAssets || outgoingAssetCount > maxBridgeAssets) return { ok: false, scorePenalty: 0 };
+    if (bridgeGap > maxBridgeGap) return { ok: false, scorePenalty: 0 };
+    scorePenalty += bridgeGap / 240 + Math.max(0, incomingAssetCount - 2) * 2.6;
+  }
+
+  return {
+    ok: true,
+    scorePenalty,
+  };
+}
+
+function buildMultiTeamBalanceContext(tradeState, values) {
+  const participantMetrics = getMultiTeamParticipantMetrics(tradeState, values);
+  const senderMetrics = participantMetrics
+    .filter((metric) => metric.needSend > 140)
+    .sort((left, right) => right.needSend - left.needSend);
+  const receiverMetrics = participantMetrics
+    .filter((metric) => metric.needReceive > 140)
+    .sort((left, right) => right.needReceive - left.needReceive);
+  const anchorValueTotal = [...tradeState.stateByRosterId.values()].reduce((sum, participantState) => {
+    return sum + participantState.outgoingTransfers
+      .filter((transfer) => transfer.kind === "anchor")
+      .reduce((assetSum, transfer) => assetSum + getAssetValue(transfer.asset, values), 0);
+  }, 0);
+  const requestedAnchorValueTotal = [...tradeState.stateByRosterId.values()].reduce((sum, participantState) => {
+    return sum + participantState.outgoingTransfers
+      .filter((transfer) => transfer.kind === "anchor" && transfer.isRequested)
+      .reduce((assetSum, transfer) => assetSum + getAssetValue(transfer.asset, values), 0);
+  }, 0);
+  const totalNeedSend = senderMetrics.reduce((sum, metric) => sum + metric.needSend, 0);
+  const totalNeedReceive = receiverMetrics.reduce((sum, metric) => sum + metric.needReceive, 0);
+
+  return {
+    participantMetrics,
+    senderMetrics,
+    receiverMetrics,
+    anchorValueTotal,
+    requestedAnchorValueTotal,
+    unrequestedAnchorValueTotal: Math.max(0, anchorValueTotal - requestedAnchorValueTotal),
+    totalNeedSend,
+    totalNeedReceive,
+  };
+}
+
+function buildMultiTeamPackageVariants({
+  tradeState,
+  balanceContext,
+  meRoster,
+  values,
+  tradeLab,
+}) {
+  if (balanceContext.senderMetrics.length === 0 || balanceContext.receiverMetrics.length === 0) {
+    return [{
+      senderPackages: new Map(),
+      totalFillerValue: 0,
+      totalFillerAssets: 0,
+      packageScore: 0,
+    }];
+  }
+
+  const senderContexts = balanceContext.senderMetrics.map((metric) => ({
+    metric,
+    participantState: tradeState.stateByRosterId.get(metric.roster.rosterId),
+    packageOptions: buildMultiTeamSenderPackageOptions({
+      tradeState,
+      metric,
+      meRoster,
+      values,
+      tradeLab,
+    }),
+  }));
+
+  if (senderContexts.some((context) => context.packageOptions.length === 0)) return [];
+
+  const variants = [];
+  const targetTotal = balanceContext.totalNeedReceive;
+
+  function walk(index, senderPackages, totalFillerValue, totalFillerAssets, packageScore) {
+    if (index >= senderContexts.length) {
+      const totalMismatch = Math.abs(totalFillerValue - targetTotal);
+      const overshoot = Math.max(0, totalFillerValue - targetTotal);
+      if (overshoot > Math.max(MULTI_TEAM_MAX_FILLER_OVERSHOOT_BASE, targetTotal * 0.18)) return;
+      variants.push({
+        senderPackages: new Map(senderPackages),
+        totalFillerValue,
+        totalFillerAssets,
+        packageScore: packageScore + totalMismatch * 2.3 + overshoot * 2.8 + totalFillerAssets * 55,
+      });
+      return;
+    }
+
+    const context = senderContexts[index];
+    for (const packageOption of context.packageOptions) {
+      const nextTotalFillerValue = totalFillerValue + packageOption.totalValue;
+      const hardCeiling = targetTotal + Math.max(MULTI_TEAM_MAX_FILLER_OVERSHOOT_BASE, targetTotal * 0.22);
+      if (nextTotalFillerValue > hardCeiling) continue;
+      senderPackages.set(context.metric.roster.rosterId, packageOption);
+      walk(
+        index + 1,
+        senderPackages,
+        nextTotalFillerValue,
+        totalFillerAssets + packageOption.assets.length,
+        packageScore + packageOption.packagePenalty
+      );
+      senderPackages.delete(context.metric.roster.rosterId);
+    }
+  }
+
+  walk(0, new Map(), 0, 0, 0);
+
+  return variants
+    .sort((left, right) => left.packageScore - right.packageScore)
+    .slice(0, MULTI_TEAM_VARIANT_COUNT);
+}
+
+function buildMultiTeamSenderPackageOptions({
+  tradeState,
+  metric,
+  meRoster,
+  values,
+  tradeLab,
+}) {
+  const participantState = tradeState.stateByRosterId.get(metric.roster.rosterId);
+  const candidateAssets = buildAvailableMultiTeamFillerAssets({
+    participantState,
+    meRoster,
+    values,
+    tradeLab,
+    variantIndex: 0,
+  });
+  const maxAssets = getMultiTeamMaxFillerAssetsForGap(metric.needSend);
+  const packageTarget = metric.needSend;
+  const packages = [];
+
+  packages.push({
+    assets: [],
+    totalValue: 0,
+    packagePenalty: packageTarget * 4.2,
+  });
+
+  buildPackages(candidateAssets, values, maxAssets)
+    .map((pkg) => ({
+      assets: pkg.assets,
+      totalValue: pkg.values.reduce((sum, value) => sum + value, 0),
+    }))
+    .forEach((pkg) => {
+      if (pkg.totalValue <= 0) return;
+      if (pkg.totalValue > packageTarget + Math.max(MULTI_TEAM_MAX_FILLER_OVERSHOOT_BASE, packageTarget * 0.32)) return;
+
+      const overshoot = Math.max(0, pkg.totalValue - packageTarget);
+      const shortfall = Math.max(0, packageTarget - pkg.totalValue);
+      const corePenalty = pkg.assets.reduce((sum, asset) => {
+        return sum + (participantState.coreAssetIds.has(asset.assetId) ? (participantState.roster.rosterId === meRoster.rosterId ? 520 : 260) : 0);
+      }, 0);
+      const assetCountPenalty = pkg.assets.length * 165;
+      const overshootPenalty = overshoot * 3.8;
+      const shortfallPenalty = shortfall * 2.4;
+      const rawPenalty = overshootPenalty + shortfallPenalty + assetCountPenalty + corePenalty;
+
+      packages.push({
+        assets: pkg.assets,
+        totalValue: pkg.totalValue,
+        packagePenalty: rawPenalty,
+      });
+    });
+
+  const deduped = [];
+  const seen = new Set();
+  for (const pkg of packages.sort((left, right) => {
+    if (left.packagePenalty !== right.packagePenalty) return left.packagePenalty - right.packagePenalty;
+    if (left.assets.length !== right.assets.length) return left.assets.length - right.assets.length;
+    return left.totalValue - right.totalValue;
+  })) {
+    const key = pkg.assets.map((asset) => asset.assetId).sort().join("|");
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(pkg);
+    if (deduped.length >= MULTI_TEAM_SENDER_PACKAGE_OPTION_LIMIT) break;
+  }
+
+  return deduped;
+}
+
+function getMultiTeamMaxFillerAssetsForGap(valueGap) {
+  if (!Number.isFinite(valueGap) || valueGap <= 0) return 0;
+  if (valueGap >= 6000) return 3;
+  if (valueGap >= 2600) return 2;
+  return 1;
+}
+
+function assignMultiTeamFillers({
+  tradeState,
+  balanceContext,
+  packageVariant,
+  values,
+}) {
+  if (packageVariant.totalFillerAssets === 0) {
+    return {
+      transfers: [],
+      meta: {
+        fillerValueTotal: 0,
+        fillerAssetCount: 0,
+        fillerPairCount: 0,
+        senderSplitCount: 0,
+        receiverSplitCount: 0,
+      },
+    };
+  }
+
+  const fillerAssets = [...packageVariant.senderPackages.entries()]
+    .flatMap(([fromRosterId, pkg]) => pkg.assets.map((asset) => ({
+      fromRosterId,
+      asset,
+      value: getAssetValue(asset, values),
+    })))
+    .sort((left, right) => right.value - left.value || left.asset.name.localeCompare(right.asset.name));
+  const receiverNeeds = new Map(balanceContext.receiverMetrics.map((metric) => [metric.roster.rosterId, metric.needReceive]));
+  const basePairSet = new Set(
+    [...tradeState.stateByRosterId.values()]
+      .flatMap((participantState) => participantState.outgoingTransfers.map((transfer) => `${transfer.fromRosterId}->${transfer.toRosterId}`))
+  );
+
+  let bestResult = null;
+
+  function walk(index, remainingNeeds, transfers, fillerPairSet, receiverBySender, senderByReceiver) {
+    if (index >= fillerAssets.length) {
+      const residualGap = [...remainingNeeds.values()].reduce((sum, gap) => sum + Math.abs(gap), 0);
+      const overshootGap = [...remainingNeeds.values()].reduce((sum, gap) => sum + Math.max(0, -gap), 0);
+      const fillerPairCount = fillerPairSet.size;
+      const senderSplitCount = [...receiverBySender.values()].reduce((sum, receiverIds) => sum + Math.max(0, receiverIds.size - 1), 0);
+      const receiverSplitCount = [...senderByReceiver.values()].reduce((sum, senderIds) => sum + Math.max(0, senderIds.size - 1), 0);
+      const objective = residualGap * 3.8 + overshootGap * 5.6 + fillerPairCount * 160 + senderSplitCount * 170 + receiverSplitCount * 145 + transfers.length * 28;
+
+      if (!bestResult || objective < bestResult.objective) {
+        bestResult = {
+          objective,
+          transfers: [...transfers],
+          meta: {
+            fillerValueTotal: packageVariant.totalFillerValue,
+            fillerAssetCount: fillerAssets.length,
+            fillerPairCount,
+            senderSplitCount,
+            receiverSplitCount,
+          },
+        };
+      }
+      return;
+    }
+
+    const fillerAsset = fillerAssets[index];
+    const receiverOptions = buildMultiTeamReceiverOptions({
+      fillerAsset,
+      remainingNeeds,
+      basePairSet,
+      fillerPairSet,
+      receiverBySender,
+      senderByReceiver,
+    });
+    if (receiverOptions.length === 0) return;
+
+    for (const option of receiverOptions) {
+      const nextNeeds = new Map(remainingNeeds);
+      nextNeeds.set(option.toRosterId, option.remainingAfter);
+      const nextTransfers = [...transfers, {
+        fromRosterId: fillerAsset.fromRosterId,
+        toRosterId: option.toRosterId,
+        asset: fillerAsset.asset,
+      }];
+      const nextPairSet = new Set(fillerPairSet);
+      nextPairSet.add(option.pairKey);
+      const nextReceiverBySender = new Map(receiverBySender);
+      const nextReceiverSet = new Set(nextReceiverBySender.get(fillerAsset.fromRosterId) || []);
+      nextReceiverSet.add(option.toRosterId);
+      nextReceiverBySender.set(fillerAsset.fromRosterId, nextReceiverSet);
+      const nextSenderByReceiver = new Map(senderByReceiver);
+      const nextSenderSet = new Set(nextSenderByReceiver.get(option.toRosterId) || []);
+      nextSenderSet.add(fillerAsset.fromRosterId);
+      nextSenderByReceiver.set(option.toRosterId, nextSenderSet);
+      walk(index + 1, nextNeeds, nextTransfers, nextPairSet, nextReceiverBySender, nextSenderByReceiver);
+    }
+  }
+
+  walk(0, receiverNeeds, [], new Set(), new Map(), new Map());
+  return bestResult;
+}
+
+function buildMultiTeamReceiverOptions({
+  fillerAsset,
+  remainingNeeds,
+  basePairSet,
+  fillerPairSet,
+  receiverBySender,
+  senderByReceiver,
+}) {
+  const options = [];
+  remainingNeeds.forEach((remainingNeed, toRosterId) => {
+    if (toRosterId === fillerAsset.fromRosterId) return;
+
+    const pairKey = `${fillerAsset.fromRosterId}->${toRosterId}`;
+    const remainingAfter = remainingNeed - fillerAsset.value;
+    const overshoot = Math.max(0, -remainingAfter);
+    const maxOvershoot = Math.max(MULTI_TEAM_MAX_FILLER_OVERSHOOT_BASE, remainingNeed * 0.65);
+    if (overshoot > maxOvershoot) return;
+
+    const existingPair = basePairSet.has(pairKey) || fillerPairSet.has(pairKey);
+    const senderTargets = receiverBySender.get(fillerAsset.fromRosterId) || new Set();
+    const receiverSenders = senderByReceiver.get(toRosterId) || new Set();
+    const newDestinationPenalty = !existingPair && senderTargets.size > 0 && !senderTargets.has(toRosterId) ? 1 : 0;
+    const multiSenderPenalty = receiverSenders.size > 0 && !receiverSenders.has(fillerAsset.fromRosterId) ? 1 : 0;
+    const closenessPenalty = Math.abs(fillerAsset.value - remainingNeed);
+    const optionScore = closenessPenalty + overshoot * 1.1 + newDestinationPenalty * 260 + multiSenderPenalty * 190 + (existingPair ? -110 : 0);
+
+    options.push({
+      toRosterId,
+      pairKey,
+      remainingAfter,
+      optionScore,
+    });
+  });
+
+  return options
+    .sort((left, right) => left.optionScore - right.optionScore)
+    .slice(0, MULTI_TEAM_MAX_FILLER_PAIRS_PER_ASSET);
 }
 
 function buildCircularRecipientMap(ownerSequence) {
@@ -3579,7 +4080,7 @@ function buildAutoMultiTeamHelperSets({ meRoster, targetOwner, helperCount, targ
     .filter((roster) => roster.rosterId !== meRoster.rosterId && roster.rosterId !== targetOwner.rosterId)
     .map((roster) => ({
       roster,
-      score: scoreAutoMultiTeamHelperRoster(roster, targetValue, values),
+      score: scoreAutoMultiTeamHelperRoster(roster, targetValue, values, helperCount),
     }))
     .sort((a, b) => b.score - a.score || a.roster.manager.displayName.localeCompare(b.roster.manager.displayName));
 
@@ -3607,17 +4108,265 @@ function dedupeHelperRosterSets(sets) {
   return deduped;
 }
 
-function scoreAutoMultiTeamHelperRoster(roster, targetValue, values) {
+function scoreAutoMultiTeamHelperRoster(roster, targetValue, values, helperCount = 1) {
+  const bridgeTarget = Math.max(900, targetValue / Math.max(2.4, helperCount + 1.6));
+  const helperCap = targetValue * AUTO_MULTI_TEAM_HELPER_ANCHOR_CAP_SHARE;
+  const coreAssetIds = getCoreAssetIdSet(roster, values);
   const topAssets = roster.assets
     .map((asset) => ({ asset, value: getAssetValue(asset, values) }))
     .filter((entry) => Number.isFinite(entry.value))
     .sort((a, b) => b.value - a.value)
-    .slice(0, 4);
+    .slice(0, 8);
   if (topAssets.length === 0) return Number.NEGATIVE_INFINITY;
 
-  const bestDistance = Math.min(...topAssets.map((entry) => Math.abs(entry.value - targetValue)));
-  const liquidityBonus = topAssets.filter((entry) => entry.asset.assetType === "pick").length * 35;
-  return 10000 - bestDistance + liquidityBonus;
+  const bestBridgeScore = Math.max(...topAssets.map((entry) => {
+    const overCapPenalty = entry.value > helperCap ? (entry.value - helperCap) * 1.1 : 0;
+    const corePenalty = coreAssetIds.has(entry.asset.assetId) ? 620 : 0;
+    const liquidityBonus = entry.asset.assetType === "pick" ? 140 : isYouthAsset(entry.asset) ? 60 : 0;
+    return 10000 - Math.abs(entry.value - bridgeTarget) - overCapPenalty - corePenalty + liquidityBonus;
+  }));
+  const bridgeDepthBonus = topAssets.filter((entry) => (
+    entry.value >= bridgeTarget * 0.55
+    && entry.value <= helperCap
+    && !coreAssetIds.has(entry.asset.assetId)
+  )).length * 55;
+  const starPenalty = topAssets.filter((entry) => entry.value > targetValue * 0.82).length * 110;
+
+  return bestBridgeScore + bridgeDepthBonus - starPenalty;
+}
+
+function getResolvedMultiTeamTradeTier(tradeTier) {
+  return tradeTier === "all" ? "even" : tradeTier;
+}
+
+function getAutoMultiTeamMyAnchorTargetValue(targetValue, helperCount, tradeTier) {
+  const resolvedTradeTier = getResolvedMultiTeamTradeTier(tradeTier);
+  const baseShare = resolvedTradeTier === "level-up"
+    ? 0.68
+    : resolvedTradeTier === "break-down"
+      ? 0.92
+      : 0.82;
+  return Math.max(900, targetValue * Math.max(0.46, baseShare - helperCount * 0.06));
+}
+
+function buildAutoMultiTeamHelperTargetValues({ targetValue, myAnchorValue, helperCount }) {
+  if (helperCount <= 0) return [];
+
+  const targets = [];
+  let nextTarget = Math.min(
+    targetValue * 0.52,
+    Math.max(850, (targetValue - myAnchorValue) * 0.72)
+  );
+
+  for (let index = 0; index < helperCount; index += 1) {
+    const remainingHelpers = helperCount - index;
+    const floor = Math.max(450, nextTarget * 0.4, (targetValue - myAnchorValue) / Math.max(remainingHelpers + 1, 2) * 0.55);
+    const desiredValue = Math.round(Math.max(floor, nextTarget));
+    targets.push(desiredValue);
+    nextTarget = Math.max(450, desiredValue * 0.62);
+  }
+
+  return targets;
+}
+
+function listAutoMultiTeamAnchorCandidates({
+  roster,
+  targetValue,
+  desiredValue,
+  values,
+  tradeTier,
+  usedAssetIds = new Set(),
+  protectRosterCore = false,
+  isMyRoster = false,
+  minValue = 0,
+  maxValue = Number.POSITIVE_INFINITY,
+  limit = 1,
+  preferLiquidity = false,
+}) {
+  const coreAssetIds = protectRosterCore ? getCoreAssetIdSet(roster, values) : new Set();
+  const lockedSelectedAssets = isMyRoster && state.selectedOutgoingAssetIds.size > 0
+    ? roster.assets.filter((asset) => state.selectedOutgoingAssetIds.has(asset.assetId) && !usedAssetIds.has(asset.assetId))
+    : [];
+  if (lockedSelectedAssets.length > 0) {
+    return [...lockedSelectedAssets]
+      .filter((asset) => getAssetValue(asset, values) >= minValue)
+      .sort((a, b) => sortAssetsByValueDesc(a, b, values))
+      .slice(0, limit);
+  }
+
+  const resolvedTradeTier = getResolvedMultiTeamTradeTier(tradeTier);
+  const fallbackDesiredValue = resolvedTradeTier === "level-up"
+    ? targetValue * 0.72
+    : resolvedTradeTier === "break-down"
+      ? targetValue * 1.08
+      : targetValue;
+  const targetBand = Number.isFinite(desiredValue) && desiredValue > 0 ? desiredValue : fallbackDesiredValue;
+
+  return roster.assets
+    .filter((asset) => Number.isFinite(getAssetValue(asset, values)))
+    .filter((asset) => !usedAssetIds.has(asset.assetId))
+    .filter((asset) => !isMyRoster || !state.excludedOutgoingAssetIds.has(asset.assetId))
+    .filter((asset) => {
+      const value = getAssetValue(asset, values);
+      return value >= minValue && value <= maxValue;
+    })
+    .sort((left, right) => {
+      const leftValue = getAssetValue(left, values);
+      const rightValue = getAssetValue(right, values);
+      const leftScore = Math.abs(leftValue - targetBand)
+        + (leftValue > maxValue ? (leftValue - maxValue) * 1.35 : 0)
+        + (coreAssetIds.has(left.assetId) ? 650 : 0)
+        - (preferLiquidity && left.assetType === "pick" ? 180 : 0)
+        - (preferLiquidity && isYouthAsset(left) ? 60 : 0);
+      const rightScore = Math.abs(rightValue - targetBand)
+        + (rightValue > maxValue ? (rightValue - maxValue) * 1.35 : 0)
+        + (coreAssetIds.has(right.assetId) ? 650 : 0)
+        - (preferLiquidity && right.assetType === "pick" ? 180 : 0)
+        - (preferLiquidity && isYouthAsset(right) ? 60 : 0);
+      if (leftScore !== rightScore) return leftScore - rightScore;
+      return rightValue - leftValue;
+    })
+    .slice(0, limit);
+}
+
+function buildAutoMultiTeamAnchorPlans({
+  meRoster,
+  helperSet,
+  targetOwner,
+  targetAsset,
+  values,
+  tradeTier,
+}) {
+  const targetValue = getAssetValue(targetAsset, values);
+  if (!Number.isFinite(targetValue)) return [];
+
+  const helperCount = helperSet.length;
+  const myAnchorCandidates = listAutoMultiTeamAnchorCandidates({
+    roster: meRoster,
+    targetValue,
+    desiredValue: getAutoMultiTeamMyAnchorTargetValue(targetValue, helperCount, tradeTier),
+    values,
+    tradeTier,
+    usedAssetIds: new Set([targetAsset.assetId]),
+    protectRosterCore: true,
+    isMyRoster: true,
+    minValue: 750,
+    maxValue: targetValue * (getResolvedMultiTeamTradeTier(tradeTier) === "break-down" ? 1.15 : 0.96),
+    limit: AUTO_MULTI_TEAM_MY_ANCHOR_CANDIDATE_LIMIT,
+  });
+  if (myAnchorCandidates.length === 0) {
+    myAnchorCandidates.push(
+      ...listAutoMultiTeamAnchorCandidates({
+        roster: meRoster,
+        targetValue,
+        desiredValue: targetValue * 0.8,
+        values,
+        tradeTier,
+        usedAssetIds: new Set([targetAsset.assetId]),
+        protectRosterCore: true,
+        isMyRoster: true,
+        minValue: 650,
+        maxValue: targetValue * 1.08,
+        limit: AUTO_MULTI_TEAM_MY_ANCHOR_CANDIDATE_LIMIT,
+      })
+    );
+  }
+  if (myAnchorCandidates.length === 0) return [];
+
+  const plans = [];
+  myAnchorCandidates.forEach((myAnchor) => {
+    for (let helperVariant = 0; helperVariant < AUTO_MULTI_TEAM_HELPER_ANCHOR_CANDIDATE_LIMIT; helperVariant += 1) {
+      const usedAnchorIds = new Set([targetAsset.assetId, myAnchor.assetId]);
+      const helperTargets = buildAutoMultiTeamHelperTargetValues({
+        targetValue,
+        myAnchorValue: getAssetValue(myAnchor, values),
+        helperCount,
+      });
+      const helperAnchors = [];
+      let failed = false;
+
+      helperSet.forEach((helperRoster, helperIndex) => {
+        const desiredValue = helperTargets[helperIndex] || Math.max(450, targetValue * 0.16);
+        const primaryHelperCandidates = listAutoMultiTeamAnchorCandidates({
+          roster: helperRoster,
+          targetValue,
+          desiredValue,
+          values,
+          tradeTier,
+          usedAssetIds: usedAnchorIds,
+          minValue: Math.max(350, desiredValue * 0.45),
+          maxValue: Math.min(targetValue * AUTO_MULTI_TEAM_HELPER_ANCHOR_CAP_SHARE, desiredValue * 1.45 + 600),
+          limit: AUTO_MULTI_TEAM_HELPER_ANCHOR_CANDIDATE_LIMIT,
+          preferLiquidity: true,
+        });
+        const helperCandidate = primaryHelperCandidates[Math.min(helperVariant, primaryHelperCandidates.length - 1)] || listAutoMultiTeamAnchorCandidates({
+          roster: helperRoster,
+          targetValue,
+          desiredValue,
+          values,
+          tradeTier,
+          usedAssetIds: usedAnchorIds,
+          minValue: Math.max(300, desiredValue * 0.38),
+          maxValue: Math.min(targetValue * 0.82, desiredValue * 1.75 + 900),
+          limit: 1,
+          preferLiquidity: true,
+        })[0];
+        if (!helperCandidate) {
+          failed = true;
+          return;
+        }
+        helperAnchors.push({
+          roster: helperRoster,
+          asset: helperCandidate,
+          value: getAssetValue(helperCandidate, values),
+        });
+        usedAnchorIds.add(helperCandidate.assetId);
+      });
+
+      if (failed) continue;
+
+      const orderedHelperAnchors = helperAnchors
+        .sort((left, right) => right.value - left.value || left.roster.manager.displayName.localeCompare(right.roster.manager.displayName));
+      const participantRosters = [meRoster, ...orderedHelperAnchors.map((entry) => entry.roster), targetOwner];
+      const anchorAssetByOwner = new Map([
+        [meRoster.rosterId, myAnchor],
+        [targetOwner.rosterId, targetAsset],
+        ...orderedHelperAnchors.map((entry) => [entry.roster.rosterId, entry.asset]),
+      ]);
+      const ownerSequence = participantRosters.map((roster) => roster.rosterId);
+      const anchorTransfers = ownerSequence
+        .map((ownerId, index) => ({
+          fromRosterId: ownerId,
+          toRosterId: ownerSequence[(index + 1) % ownerSequence.length],
+          asset: anchorAssetByOwner.get(ownerId),
+          isRequested: ownerId === targetOwner.rosterId,
+        }))
+        .filter((transfer) => transfer.asset);
+
+      if (anchorTransfers.length !== participantRosters.length) continue;
+      plans.push({
+        participantRosters,
+        anchorTransfers,
+      });
+    }
+  });
+
+  return dedupeAutoMultiTeamAnchorPlans(plans).slice(0, AUTO_MULTI_TEAM_MY_ANCHOR_CANDIDATE_LIMIT + 1);
+}
+
+function dedupeAutoMultiTeamAnchorPlans(plans) {
+  const seen = new Set();
+  const deduped = [];
+  plans.forEach((plan) => {
+    const key = plan.anchorTransfers
+      .map((transfer) => `${transfer.fromRosterId}:${transfer.asset.assetId}`)
+      .sort()
+      .join("|");
+    if (seen.has(key)) return;
+    seen.add(key);
+    deduped.push(plan);
+  });
+  return deduped;
 }
 
 function pickAutoMultiTeamAnchorAsset({
@@ -3629,32 +4378,17 @@ function pickAutoMultiTeamAnchorAsset({
   protectRosterCore = false,
   isMyRoster = false,
 }) {
-  const coreAssetIds = protectRosterCore ? getCoreAssetIdSet(roster, values) : new Set();
-  const lockedSelectedAssets = isMyRoster && state.selectedOutgoingAssetIds.size > 0
-    ? roster.assets.filter((asset) => state.selectedOutgoingAssetIds.has(asset.assetId) && !usedAssetIds.has(asset.assetId))
-    : [];
-  if (lockedSelectedAssets.length > 0) {
-    return [...lockedSelectedAssets].sort((a, b) => sortAssetsByValueDesc(a, b, values))[0];
-  }
-
-  const desiredValue = tradeTier === "level-up"
-    ? targetValue * 0.72
-    : tradeTier === "break-down"
-      ? targetValue * 1.15
-      : targetValue;
-
-  return roster.assets
-    .filter((asset) => Number.isFinite(getAssetValue(asset, values)))
-    .filter((asset) => !usedAssetIds.has(asset.assetId))
-    .filter((asset) => !isMyRoster || !state.excludedOutgoingAssetIds.has(asset.assetId))
-    .sort((left, right) => {
-      const leftValue = getAssetValue(left, values);
-      const rightValue = getAssetValue(right, values);
-      const leftScore = Math.abs(leftValue - desiredValue) + (coreAssetIds.has(left.assetId) ? 650 : 0);
-      const rightScore = Math.abs(rightValue - desiredValue) + (coreAssetIds.has(right.assetId) ? 650 : 0);
-      if (leftScore !== rightScore) return leftScore - rightScore;
-      return rightValue - leftValue;
-    })[0] || null;
+  return listAutoMultiTeamAnchorCandidates({
+    roster,
+    targetValue,
+    desiredValue: null,
+    values,
+    tradeTier,
+    usedAssetIds,
+    protectRosterCore,
+    isMyRoster,
+    limit: 1,
+  })[0] || null;
 }
 
 function buildMultiTeamIdeasFromCycle({
@@ -3850,6 +4584,12 @@ function dedupeMultiTeamIdeas(ideas) {
 function compareMultiTeamIdeas(a, b) {
   const byScore = b.labScore - a.labScore;
   if (byScore !== 0) return byScore;
+  const byAddedValue = (a.extraMovedValueTotal || 0) - (b.extraMovedValueTotal || 0);
+  if (byAddedValue !== 0) return byAddedValue;
+  const byFillerRatio = (a.fillerRatio || 0) - (b.fillerRatio || 0);
+  if (byFillerRatio !== 0) return byFillerRatio;
+  const byFillerAssets = (a.fillerAssetCount || 0) - (b.fillerAssetCount || 0);
+  if (byFillerAssets !== 0) return byFillerAssets;
   const byMaxDiff = a.maxPctDiff - b.maxPctDiff;
   if (byMaxDiff !== 0) return byMaxDiff;
   const byAvgDiff = a.avgPctDiff - b.avgPctDiff;
