@@ -46,11 +46,11 @@ const MULTI_TEAM_MAX_UNREQUESTED_ANCHOR_RATIO_STEP = 0.18;
 const MULTI_TEAM_MAX_FILLER_OVERAGE_RATIO_BASE = 0.18;
 const MULTI_TEAM_MAX_FILLER_OVERAGE_RATIO_STEP = 0.05;
 const MULTI_TEAM_COMPENSATION_BEAM_WIDTH = 28;
-const MULTI_TEAM_COMPENSATION_BRANCH_LIMIT = 10;
+const MULTI_TEAM_COMPENSATION_BRANCH_LIMIT = 12;
 const MULTI_TEAM_COMPENSATION_DONOR_LIMIT = 3;
 const MULTI_TEAM_COMPENSATION_RECIPIENT_LIMIT = 3;
-const MULTI_TEAM_COMPENSATION_ASSET_POOL_LIMIT = 8;
-const MULTI_TEAM_COMPENSATION_TOLERANCE = 325;
+const MULTI_TEAM_COMPENSATION_ASSET_POOL_LIMIT = 16;
+const MULTI_TEAM_COMPENSATION_TOLERANCE = 425;
 const AUTO_MULTI_TEAM_MY_ANCHOR_CANDIDATE_LIMIT = 3;
 const AUTO_MULTI_TEAM_HELPER_ANCHOR_CANDIDATE_LIMIT = 2;
 const AUTO_MULTI_TEAM_HELPER_ANCHOR_CAP_SHARE = 0.68;
@@ -3424,6 +3424,7 @@ function buildAvailableMultiTeamFillerAssets({
   values,
   tradeLab,
   variantIndex,
+  limit = MULTI_TEAM_FILLER_POOL_LIMIT,
 }) {
   const sentAssetIds = new Set(participantState.outgoingTransfers.map((transfer) => transfer.asset.assetId));
   const isMyRoster = participantState.roster.rosterId === meRoster.rosterId;
@@ -3438,7 +3439,7 @@ function buildAvailableMultiTeamFillerAssets({
       if (rightScore !== leftScore) return rightScore - leftScore;
       return sortAssetsByValueDesc(left, right, values);
     })
-    .slice(0, MULTI_TEAM_FILLER_POOL_LIMIT);
+    .slice(0, limit);
 }
 
 function scoreMultiTeamAssetLiquidity(asset, participantState, meRoster, values, tradeLab, variantIndex) {
@@ -3730,7 +3731,7 @@ function evaluateMultiTeamParticipantShape({
   } else if (tradeShape.role === "break-down") {
     const maxAssets = 4 + (participantCount >= 5 ? 1 : 0);
     const topTwoShare = incomingProfile.totalValue > 0 ? incomingProfile.topTwoValue / incomingProfile.totalValue : 1;
-    if (incomingAssetCount > maxAssets || tradeShape.incomingFillerAssetCount > 2 + (participantCount >= 5 ? 1 : 0)) {
+    if (incomingAssetCount > maxAssets || tradeShape.incomingFillerAssetCount > 3 + (participantCount >= 5 ? 1 : 0)) {
       return { ok: false, scorePenalty: 0 };
     }
     if (incomingAssetCount >= 4 && topTwoShare < 0.72) return { ok: false, scorePenalty: 0 };
@@ -3937,6 +3938,7 @@ function buildMultiTeamCompensationCandidatePools({
       values,
       tradeLab,
       variantIndex: 0,
+      limit: MULTI_TEAM_COMPENSATION_ASSET_POOL_LIMIT,
     }).slice(0, MULTI_TEAM_COMPENSATION_ASSET_POOL_LIMIT);
     pools.set(rosterId, candidates);
   });
@@ -3963,41 +3965,24 @@ function buildMultiTeamCompensationMoves({
     .slice(0, MULTI_TEAM_COMPENSATION_RECIPIENT_LIMIT);
   const moveCandidates = [];
 
-  donors.forEach(([fromRosterId, donorBalance]) => {
-    const participantState = tradeState.stateByRosterId.get(fromRosterId);
-    const donorNeed = Math.abs(donorBalance);
-    const assets = (candidatePools.get(fromRosterId) || []).filter((asset) => !beamState.usedAssetIds.has(asset.assetId));
-    assets.forEach((asset) => {
-      const assetValue = getAssetValue(asset, values);
-      if (!Number.isFinite(assetValue) || assetValue <= 0) return;
+  recipients.forEach(([toRosterId, recipientBalance]) => {
+    donors.forEach(([fromRosterId, donorBalance]) => {
+      if (toRosterId === fromRosterId) return;
 
-      recipients.forEach(([toRosterId, recipientBalance]) => {
-        if (toRosterId === fromRosterId) return;
-
-        const moveScore = scoreMultiTeamCompensationMove({
-          asset,
-          assetValue,
-          participantState,
+      moveCandidates.push(
+        ...buildMultiTeamCompensationPackageMoves({
+          tradeState,
+          beamState,
+          candidatePools,
+          basePairSet,
+          meRoster,
+          values,
           fromRosterId,
           toRosterId,
           donorBalance,
-          donorNeed,
           recipientBalance,
-          beamState,
-          baseBalances,
-          basePairSet,
-          meRoster,
-        });
-        if (!Number.isFinite(moveScore)) return;
-
-        moveCandidates.push({
-          fromRosterId,
-          toRosterId,
-          asset,
-          assetValue,
-          score: moveScore,
-        });
-      });
+        })
+      );
     });
   });
 
@@ -4006,27 +3991,95 @@ function buildMultiTeamCompensationMoves({
     .slice(0, MULTI_TEAM_COMPENSATION_BRANCH_LIMIT);
 }
 
-function scoreMultiTeamCompensationMove({
-  asset,
-  assetValue,
+function buildMultiTeamCompensationPackageMoves({
+  tradeState,
+  beamState,
+  candidatePools,
+  basePairSet,
+  meRoster,
+  values,
+  fromRosterId,
+  toRosterId,
+  donorBalance,
+  recipientBalance,
+}) {
+  const participantState = tradeState.stateByRosterId.get(fromRosterId);
+  const availableAssets = (candidatePools.get(fromRosterId) || []).filter((asset) => !beamState.usedAssetIds.has(asset.assetId));
+  if (availableAssets.length === 0) return [];
+
+  const targetGap = Math.min(Math.abs(donorBalance), recipientBalance);
+  const maxAssets = getMultiTeamCompensationMaxPackageAssets(targetGap);
+  const rawPackages = buildPackages(availableAssets, values, Math.min(maxAssets, availableAssets.length))
+    .map((pkg) => ({
+      assets: pkg.assets,
+      values: pkg.values,
+      totalValue: pkg.values.reduce((sum, value) => sum + value, 0),
+    }))
+    .filter((pkg) => pkg.totalValue > 0);
+  const seen = new Set();
+  const packageMoves = [];
+
+  rawPackages
+    .sort((left, right) => {
+      const leftGap = Math.abs(left.totalValue - targetGap);
+      const rightGap = Math.abs(right.totalValue - targetGap);
+      if (leftGap !== rightGap) return leftGap - rightGap;
+      if (left.assets.length !== right.assets.length) return left.assets.length - right.assets.length;
+      return left.totalValue - right.totalValue;
+    })
+    .forEach((pkg) => {
+      const key = pkg.assets.map((asset) => asset.assetId).sort().join("|");
+      if (seen.has(key)) return;
+      seen.add(key);
+
+      const score = scoreMultiTeamCompensationPackage({
+        pkg,
+        participantState,
+        fromRosterId,
+        toRosterId,
+        donorBalance,
+        recipientBalance,
+        beamState,
+        basePairSet,
+        meRoster,
+        values,
+      });
+      if (!Number.isFinite(score)) return;
+
+      packageMoves.push({
+        fromRosterId,
+        toRosterId,
+        assets: pkg.assets,
+        totalValue: pkg.totalValue,
+        score,
+      });
+    });
+
+  return packageMoves
+    .sort((left, right) => left.score - right.score)
+    .slice(0, MULTI_TEAM_COMPENSATION_BRANCH_LIMIT);
+}
+
+function scoreMultiTeamCompensationPackage({
+  pkg,
   participantState,
   fromRosterId,
   toRosterId,
   donorBalance,
-  donorNeed,
   recipientBalance,
   beamState,
-  baseBalances,
   basePairSet,
   meRoster,
+  values,
 }) {
   const pairKey = `${fromRosterId}->${toRosterId}`;
   const existingPair = basePairSet.has(pairKey) || beamState.pairSet.has(pairKey);
-  const donorAfter = donorBalance + assetValue;
-  const recipientAfter = recipientBalance - assetValue;
+  const totalValue = pkg.totalValue;
+  const donorAfter = donorBalance + totalValue;
+  const recipientAfter = recipientBalance - totalValue;
   const donorOvershoot = Math.max(0, donorAfter);
   const recipientOvershoot = Math.max(0, -recipientAfter);
-  const donorTolerance = Math.max(MULTI_TEAM_MAX_FILLER_OVERSHOOT_BASE, donorNeed * 0.8);
+  const donorTolerance = Math.max(MULTI_TEAM_MAX_FILLER_OVERSHOOT_BASE, Math.abs(donorBalance) * 0.9);
   const recipientTolerance = Math.max(MULTI_TEAM_MAX_FILLER_OVERSHOOT_BASE, recipientBalance * 0.72);
 
   if (donorOvershoot > donorTolerance) return Number.POSITIVE_INFINITY;
@@ -4035,43 +4088,58 @@ function scoreMultiTeamCompensationMove({
   const senderTargets = beamState.receiverBySender.get(fromRosterId) || new Set();
   const recipientSources = beamState.senderByReceiver.get(toRosterId) || new Set();
   const isMyRoster = fromRosterId === meRoster.rosterId;
-  const corePenalty = participantState.coreAssetIds.has(asset.assetId) ? (isMyRoster ? 980 : 460) : 0;
-  const selectedBonus = isMyRoster && state.selectedOutgoingAssetIds.has(asset.assetId) ? -210 : 0;
-  const closenessPenalty = Math.abs(assetValue - Math.min(Math.abs(donorBalance), recipientBalance));
-  const lanePenalty = existingPair ? -120 : 90;
+  const targetGap = Math.min(Math.abs(donorBalance), recipientBalance);
+  const corePenalty = pkg.assets.reduce((sum, asset) => {
+    return sum + (participantState.coreAssetIds.has(asset.assetId) ? (isMyRoster ? 980 : 460) : 0);
+  }, 0);
+  const selectedBonus = isMyRoster
+    ? pkg.assets.reduce((sum, asset) => sum + (state.selectedOutgoingAssetIds.has(asset.assetId) ? 190 : 0), 0)
+    : 0;
+  const microPiecePenalty = pkg.values.reduce((sum, value, index) => sum + (index >= 1 && value < 900 ? 120 : 0), 0);
+  const closenessPenalty = Math.abs(totalValue - targetGap) * 1.35;
+  const lanePenalty = existingPair ? -140 : 95;
   const senderSplitPenalty = senderTargets.size > 0 && !senderTargets.has(toRosterId) ? 170 : 0;
   const receiverSplitPenalty = recipientSources.size > 0 && !recipientSources.has(fromRosterId) ? 140 : 0;
-  const donorFlipPenalty = Math.max(0, donorAfter) * 1.8;
-  const recipientFlipPenalty = Math.max(0, -recipientAfter) * 2.3;
-  const valuePenalty = assetValue * 0.72;
-  const improvementBonus = (Math.min(Math.abs(donorBalance), assetValue) + Math.min(recipientBalance, assetValue)) * 1.25;
-  const roleFlipPenalty = (
-    (baseBalances.get(fromRosterId) < 0 && donorAfter > MULTI_TEAM_COMPENSATION_TOLERANCE ? donorAfter * 0.75 : 0)
-    + (baseBalances.get(toRosterId) > 0 && recipientAfter < -MULTI_TEAM_COMPENSATION_TOLERANCE ? Math.abs(recipientAfter) * 1.1 : 0)
-  );
+  const donorFlipPenalty = Math.max(0, donorAfter) * 1.9;
+  const recipientFlipPenalty = Math.max(0, -recipientAfter) * 2.25;
+  const assetCountPenalty = Math.max(0, pkg.assets.length - 1) * 155;
+  const overpayPenalty = Math.max(0, totalValue - targetGap) * 0.82;
+  const underpayPenalty = Math.max(0, targetGap - totalValue) * 0.48;
+  const valuePenalty = totalValue * 0.18;
+  const improvementBonus = (Math.min(Math.abs(donorBalance), totalValue) + Math.min(recipientBalance, totalValue)) * 1.22;
 
   return (
     closenessPenalty
+    + overpayPenalty
+    + underpayPenalty
     + valuePenalty
     + lanePenalty
     + senderSplitPenalty
     + receiverSplitPenalty
     + corePenalty
+    + assetCountPenalty
+    + microPiecePenalty
     + donorFlipPenalty
     + recipientFlipPenalty
-    + roleFlipPenalty
-    + selectedBonus
+    - selectedBonus
     - improvementBonus
   );
 }
 
+function getMultiTeamCompensationMaxPackageAssets(targetGap) {
+  if (!Number.isFinite(targetGap) || targetGap <= 0) return 1;
+  if (targetGap >= 7000) return 4;
+  if (targetGap >= 2600) return 3;
+  return 2;
+}
+
 function applyMultiTeamCompensationMove(beamState, move) {
   const nextBalances = new Map(beamState.balanceByRosterId);
-  nextBalances.set(move.fromRosterId, nextBalances.get(move.fromRosterId) + move.assetValue);
-  nextBalances.set(move.toRosterId, nextBalances.get(move.toRosterId) - move.assetValue);
+  nextBalances.set(move.fromRosterId, nextBalances.get(move.fromRosterId) + move.totalValue);
+  nextBalances.set(move.toRosterId, nextBalances.get(move.toRosterId) - move.totalValue);
 
   const nextUsedAssetIds = new Set(beamState.usedAssetIds);
-  nextUsedAssetIds.add(move.asset.assetId);
+  move.assets.forEach((asset) => nextUsedAssetIds.add(asset.assetId));
 
   const nextPairSet = new Set(beamState.pairSet);
   nextPairSet.add(`${move.fromRosterId}->${move.toRosterId}`);
@@ -4085,17 +4153,20 @@ function applyMultiTeamCompensationMove(beamState, move) {
   nextSenderByReceiver.get(move.toRosterId).add(move.fromRosterId);
 
   return {
-    transfers: [...beamState.transfers, {
-      fromRosterId: move.fromRosterId,
-      toRosterId: move.toRosterId,
-      asset: move.asset,
-    }],
+    transfers: [
+      ...beamState.transfers,
+      ...move.assets.map((asset) => ({
+        fromRosterId: move.fromRosterId,
+        toRosterId: move.toRosterId,
+        asset,
+      })),
+    ],
     balanceByRosterId: nextBalances,
     usedAssetIds: nextUsedAssetIds,
     pairSet: nextPairSet,
     receiverBySender: nextReceiverBySender,
     senderByReceiver: nextSenderByReceiver,
-    totalCompValue: beamState.totalCompValue + move.assetValue,
+    totalCompValue: beamState.totalCompValue + move.totalValue,
     corePenalty: beamState.corePenalty,
   };
 }
