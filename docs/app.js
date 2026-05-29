@@ -54,6 +54,9 @@ const MULTI_TEAM_COMPENSATION_TOLERANCE = 425;
 const AUTO_MULTI_TEAM_MY_ANCHOR_CANDIDATE_LIMIT = 3;
 const AUTO_MULTI_TEAM_HELPER_ANCHOR_CANDIDATE_LIMIT = 2;
 const AUTO_MULTI_TEAM_HELPER_ANCHOR_CAP_SHARE = 0.68;
+const CUSTOM_MULTI_TEAM_BASE_ANCHOR_CANDIDATE_LIMIT = 3;
+const CUSTOM_MULTI_TEAM_ORDER_LIMIT = 12;
+const CUSTOM_MULTI_TEAM_PLAN_LIMIT = 18;
 const AUTOSELECT_MANAGER_BY_LEAGUE = {
   "1315165104303513600": "NikoSkiouris",
 };
@@ -91,7 +94,6 @@ const state = {
   selectedOutgoingAssetIds: new Set(),
   excludedOutgoingAssetIds: new Set(),
   customParticipantRosterIds: [],
-  customParticipantWants: {},
 };
 
 const el = {
@@ -119,7 +121,6 @@ const el = {
   playerResults: document.querySelector("#player-results"),
   multiCustomPanel: document.querySelector("#multi-custom-panel"),
   multiCustomTeamSlots: document.querySelector("#multi-custom-team-slots"),
-  multiCustomWants: document.querySelector("#multi-custom-wants"),
   builderSection: document.querySelector("#builder-section"),
   includeAssetsToggle: document.querySelector("#include-assets-toggle"),
   includeAssetsPanel: document.querySelector("#include-assets-panel"),
@@ -313,12 +314,6 @@ function trimCustomParticipantState() {
     nextRosterIds.push(null);
   }
   state.customParticipantRosterIds = nextRosterIds;
-
-  const participantKeys = new Set([String(meRosterId)]);
-  nextRosterIds.filter(Boolean).forEach((rosterId) => participantKeys.add(String(rosterId)));
-  state.customParticipantWants = Object.fromEntries(
-    Object.entries(state.customParticipantWants).filter(([rosterId]) => participantKeys.has(String(rosterId)))
-  );
 }
 
 function syncTradeModeUi() {
@@ -340,7 +335,7 @@ function syncTradeModeUi() {
       label: "Which player or pick do you want to shop?",
     },
     "multi-custom": {
-      help: "Pick the owners involved, then lock in the must-have incoming piece for each team. The solver will add the balancing pieces around those anchors.",
+      help: "Pick the owners involved, then click generate. The solver will build blockbuster multi-team structures across those teams automatically.",
       label: "Multi-team builder",
     },
   };
@@ -370,11 +365,10 @@ function syncTradeModeUi() {
 }
 
 function renderCustomMultiTeamBuilder() {
-  if (!el.multiCustomPanel || !el.multiCustomTeamSlots || !el.multiCustomWants) return;
+  if (!el.multiCustomPanel || !el.multiCustomTeamSlots) return;
   if (getTradeMode() !== "multi-custom") return;
 
   renderCustomParticipantTeamSlots();
-  renderCustomMultiTeamWantSelectors();
 }
 
 function renderCustomParticipantTeamSlots() {
@@ -434,110 +428,18 @@ function renderCustomParticipantTeamSlots() {
     card.appendChild(label);
     el.multiCustomTeamSlots.appendChild(card);
   }
+
+  const note = document.createElement("p");
+  note.className = "muted small builder-note";
+  note.textContent = "2. Click generate and the solver will suggest blockbuster trade ideas across the teams you selected.";
+  el.multiCustomTeamSlots.appendChild(note);
 }
 
 function handleCustomParticipantTeamChange(index, rosterIdValue) {
   const rosterId = rosterIdValue ? Number(rosterIdValue) : null;
   state.customParticipantRosterIds[index] = rosterId;
-  const validParticipantKeys = new Set(
-    [String(getMyRoster()?.rosterId || "")]
-      .concat(state.customParticipantRosterIds.filter(Boolean).map((value) => String(value)))
-  );
-  state.customParticipantWants = Object.fromEntries(
-    Object.entries(state.customParticipantWants).filter(([participantId]) => validParticipantKeys.has(String(participantId)))
-  );
   invalidateResults();
   renderCustomMultiTeamBuilder();
-}
-
-function buildCustomWantOptionsForRoster(rosterId) {
-  const allParticipantRosterIds = [getMyRoster()?.rosterId, ...state.customParticipantRosterIds].filter(Boolean);
-  const participantSet = new Set(allParticipantRosterIds);
-  return state.normalizedRosters
-    .filter((roster) => participantSet.has(roster.rosterId) && roster.rosterId !== rosterId)
-    .slice()
-    .sort((a, b) => a.manager.displayName.localeCompare(b.manager.displayName))
-    .map((roster) => ({
-      rosterId: roster.rosterId,
-      managerName: roster.manager.displayName,
-      assets: [...roster.assets]
-        .filter(isTradeEligibleAsset)
-        .sort((a, b) => sortAssetsByValueDesc(a, b, state.values)),
-    }));
-}
-
-function renderCustomMultiTeamWantSelectors() {
-  if (!el.multiCustomWants) return;
-  el.multiCustomWants.innerHTML = `<p class="muted small builder-note">2. For each team, choose the player or pick that absolutely needs to come back to them.</p>`;
-
-  const meRoster = getMyRoster();
-  if (!meRoster) {
-    el.multiCustomWants.innerHTML = `<p class="muted small">Choose your team first.</p>`;
-    return;
-  }
-
-  const chosenPartnerIds = state.customParticipantRosterIds.filter(Boolean);
-  if (chosenPartnerIds.length !== state.customParticipantRosterIds.length) {
-    el.multiCustomWants.innerHTML = `<p class="muted small">Pick the other owners first, then lock in the main piece each team should receive.</p>`;
-    return;
-  }
-
-  const participantRosters = [
-    meRoster,
-    ...chosenPartnerIds
-      .map((rosterId) => state.normalizedRosters.find((roster) => roster.rosterId === rosterId))
-      .filter(Boolean),
-  ];
-
-  participantRosters.forEach((roster) => {
-    const card = document.createElement("div");
-    card.className = "multi-team-want-card";
-
-    const label = document.createElement("label");
-    label.innerHTML = `
-      ${roster.rosterId === meRoster.rosterId ? "Locked-in asset for you" : `Locked-in asset for ${roster.manager.displayName}`}
-      <select data-want-roster-id="${roster.rosterId}"></select>
-    `;
-    const select = label.querySelector("select");
-
-    const blank = document.createElement("option");
-    blank.value = "";
-    blank.textContent = "Choose a player or pick that must be included";
-    select.appendChild(blank);
-
-    buildCustomWantOptionsForRoster(roster.rosterId).forEach((group) => {
-      const optgroup = document.createElement("optgroup");
-      optgroup.label = group.managerName;
-      group.assets.forEach((asset) => {
-        const option = document.createElement("option");
-        option.value = asset.assetId;
-        option.textContent = `${asset.name} • ${formatAssetSecondaryLabel(asset, state.values)}`;
-        option.dataset.ownerRosterId = String(group.rosterId);
-        optgroup.appendChild(option);
-      });
-      select.appendChild(optgroup);
-    });
-
-    const existingWant = state.customParticipantWants[String(roster.rosterId)] || "";
-    if (existingWant) select.value = existingWant;
-    select.addEventListener("change", (event) => handleCustomParticipantWantChange(roster.rosterId, event.target.value));
-
-    const helperRow = document.createElement("div");
-    helperRow.className = "participant-pill-row";
-    helperRow.innerHTML = `<span class="participant-pill">${roster.manager.displayName}</span>`;
-    card.appendChild(helperRow);
-    card.appendChild(label);
-    el.multiCustomWants.appendChild(card);
-  });
-}
-
-function handleCustomParticipantWantChange(rosterId, assetId) {
-  if (!assetId) {
-    delete state.customParticipantWants[String(rosterId)];
-  } else {
-    state.customParticipantWants[String(rosterId)] = assetId;
-  }
-  invalidateResults();
 }
 
 async function loadLeague() {
@@ -553,7 +455,6 @@ async function loadLeague() {
   state.selectedOutgoingAssetIds.clear();
   state.excludedOutgoingAssetIds.clear();
   state.customParticipantRosterIds = [];
-  state.customParticipantWants = {};
   state.tradedPicks = [];
   state.currentDraftContext = null;
   if (el.includeAssetsToggle) el.includeAssetsToggle.checked = false;
@@ -1624,7 +1525,7 @@ function buildResultsSubtitle({ mode, meRoster, tradeLab, payload }) {
   }
   if (mode === "multi-custom") {
     const participantCount = payload?.teamCount || 0;
-    return `${meRoster.manager.displayName} building a ${participantCount}-team framework${suffix}`;
+    return `${meRoster.manager.displayName} exploring ${participantCount}-team blockbuster ideas${suffix}`;
   }
   return `${meRoster.manager.displayName} targeting ${payload?.focusAsset?.name || "a target"} from ${payload?.primaryCounterpartyName || "another manager"}${suffix}`;
 }
@@ -1636,7 +1537,7 @@ function buildNoIdeasMessage(tradeLab, mode = "acquire") {
   if (mode === "shop") {
     advice.push("shop a different asset");
   } else if (mode === "multi-custom") {
-    advice.push("change one of the locked-in assets");
+    advice.push("change the selected owners");
   } else {
     advice.push("change the target");
   }
@@ -2991,47 +2892,10 @@ function resolveCustomMultiTeamSetup() {
     return { ok: false, message: "One or more selected teams could not be resolved." };
   }
 
-  const anchorTransfers = [];
-  const wantedAssetIds = new Set();
-
-  for (const recipientRoster of participantRosters) {
-    const wantedAssetId = state.customParticipantWants[String(recipientRoster.rosterId)];
-    if (!wantedAssetId) {
-      return { ok: false, message: `Choose the locked-in asset for ${recipientRoster.rosterId === meRoster.rosterId ? "your side" : recipientRoster.manager.displayName}.` };
-    }
-    if (wantedAssetIds.has(wantedAssetId)) {
-      return { ok: false, message: "The same locked-in asset cannot be assigned to two teams." };
-    }
-
-    const ownerRoster = participantRosters.find((roster) => roster.assets.some((asset) => asset.assetId === wantedAssetId));
-    if (!ownerRoster) {
-      return { ok: false, message: "Each locked-in asset has to come from one of the owners in this trade." };
-    }
-    const wantedAsset = findAssetOnRoster(ownerRoster, wantedAssetId);
-    if (!isTradeEligibleAsset(wantedAsset)) {
-      return { ok: false, message: "Kickers and defenses cannot be locked into trades." };
-    }
-    if (ownerRoster.rosterId === recipientRoster.rosterId) {
-      return { ok: false, message: `${recipientRoster.manager.displayName} cannot ask to receive an asset already on that roster.` };
-    }
-    wantedAssetIds.add(wantedAssetId);
-    anchorTransfers.push({
-      fromRosterId: ownerRoster.rosterId,
-      toRosterId: recipientRoster.rosterId,
-      asset: wantedAsset,
-      isRequested: true,
-    });
-  }
-
-  if (anchorTransfers.length !== participantRosters.length) {
-    return { ok: false, message: "Pick one locked-in incoming asset for every team in the trade." };
-  }
-
   return {
     ok: true,
     meRoster,
     participantRosters,
-    anchorTransfers,
   };
 }
 
@@ -3067,34 +2931,311 @@ function generateCustomMultiTeamIdeas({
       teamCount: 0,
       groups: [{
         title: "Multi-Team Ideas",
-        subtitle: "Finish the owner and locked-in asset setup first.",
+        subtitle: "Finish picking the owners first.",
         emptyText: setup.message,
         ideas: [],
       }],
     };
   }
 
-  const ideas = buildMultiTeamIdeasFromAnchors({
+  const anchorPlans = buildCustomMultiTeamAnchorPlans({
     meRoster,
     participantRosters: setup.participantRosters,
-    anchorTransfers: setup.anchorTransfers,
+    values,
+    maxPlanCount: Math.max(CUSTOM_MULTI_TEAM_PLAN_LIMIT, maxResults * 4),
+  });
+  const ideas = anchorPlans.flatMap((plan) => buildMultiTeamIdeasFromAnchors({
+    meRoster,
+    participantRosters: plan.participantRosters,
+    anchorTransfers: plan.anchorTransfers,
     values,
     fairnessPct,
     maxResults,
     tradeLab,
-    focusLabel: "custom build",
-  });
+    focusLabel: "blockbuster anchors",
+  }));
+  const dedupedIdeas = dedupeMultiTeamIdeas(ideas)
+    .sort((a, b) => compareMultiTeamIdeas(a, b))
+    .slice(0, maxResults);
 
   return {
     kind: "multi-team",
     teamCount: setup.participantRosters.length,
     groups: [{
-      title: `${setup.participantRosters.length}-Team Build`,
-      subtitle: "Each team gets the locked-in asset you chose, and the solver fills in the rest around that framework.",
-      emptyText: "No multi-team structure stayed close enough to fair value.",
-      ideas,
+      title: `${setup.participantRosters.length}-Team Blockbusters`,
+      subtitle: "Automatic blockbuster ideas built across the owners you selected.",
+      emptyText: anchorPlans.length === 0
+        ? "Could not find enough headline assets across those rosters to sketch a blockbuster."
+        : "No multi-team structure stayed close enough to fair value.",
+      ideas: dedupedIdeas,
     }],
   };
+}
+
+function getCustomMultiTeamAnchorCandidateLimit(participantCount) {
+  if (participantCount >= 6) return 1;
+  if (participantCount >= 5) return 2;
+  return CUSTOM_MULTI_TEAM_BASE_ANCHOR_CANDIDATE_LIMIT;
+}
+
+function scoreCustomMultiTeamAnchorCandidate({
+  asset,
+  value,
+  rosterPeakValue,
+  blockbusterFloor,
+  coreAssetIds,
+  isMyRoster = false,
+}) {
+  let score = value;
+
+  if (value >= blockbusterFloor) {
+    score += Math.min(320, value * 0.03);
+  } else {
+    score -= (blockbusterFloor - value) * 0.18;
+  }
+
+  if (value >= rosterPeakValue * 0.92) {
+    score -= coreAssetIds.has(asset.assetId) ? 260 : 120;
+  } else if (value >= rosterPeakValue * 0.62) {
+    score += 90;
+  }
+
+  if (coreAssetIds.has(asset.assetId)) score -= 120;
+  if (asset.assetType === "pick") score += isFirstRoundPick(asset) ? 190 : 110;
+  if (isYouthAsset(asset)) score += 85;
+  if (isVeteranAsset(asset)) score -= 40;
+  if (isMyRoster && el.includeAssetsToggle?.checked && state.selectedOutgoingAssetIds.has(asset.assetId)) score += 260;
+
+  return score;
+}
+
+function listCustomMultiTeamAnchorCandidates({
+  roster,
+  values,
+  participantCount,
+  isMyRoster = false,
+}) {
+  const candidateLimit = getCustomMultiTeamAnchorCandidateLimit(participantCount);
+  const coreAssetIds = getCoreAssetIdSet(roster, values);
+  const eligibleEntries = roster.assets
+    .filter(isTradeEligibleAsset)
+    .filter((asset) => Number.isFinite(getAssetValue(asset, values)))
+    .filter((asset) => !isMyRoster || !state.excludedOutgoingAssetIds.has(asset.assetId))
+    .map((asset) => ({
+      asset,
+      value: getAssetValue(asset, values),
+    }))
+    .sort((a, b) => b.value - a.value || a.asset.name.localeCompare(b.asset.name));
+
+  if (eligibleEntries.length === 0) return [];
+
+  const rosterPeakValue = eligibleEntries[0].value;
+  const blockbusterFloor = Math.max(
+    900,
+    rosterPeakValue * (participantCount <= DEFAULT_MULTI_TEAM_COUNT ? 0.44 : 0.38)
+  );
+  const scoredEntries = eligibleEntries
+    .map((entry) => ({
+      ...entry,
+      score: scoreCustomMultiTeamAnchorCandidate({
+        asset: entry.asset,
+        value: entry.value,
+        rosterPeakValue,
+        blockbusterFloor,
+        coreAssetIds,
+        isMyRoster,
+      }),
+    }))
+    .sort((a, b) => b.score - a.score || b.value - a.value || a.asset.name.localeCompare(b.asset.name));
+
+  const picks = scoredEntries.filter((entry) => entry.value >= blockbusterFloor).slice(0, candidateLimit);
+  if (picks.length >= candidateLimit || scoredEntries.length <= candidateLimit) return picks.length > 0 ? picks : scoredEntries.slice(0, candidateLimit);
+
+  for (const entry of scoredEntries) {
+    if (picks.length >= candidateLimit) break;
+    if (picks.some((existing) => existing.asset.assetId === entry.asset.assetId)) continue;
+    picks.push(entry);
+  }
+
+  return picks;
+}
+
+function buildCustomMultiTeamCycleOrders({
+  meRoster,
+  participantRosters,
+  limit = CUSTOM_MULTI_TEAM_ORDER_LIMIT,
+}) {
+  const partnerIds = participantRosters
+    .filter((roster) => roster.rosterId !== meRoster.rosterId)
+    .map((roster) => roster.rosterId);
+  if (partnerIds.length === 0) return [];
+
+  const seen = new Set();
+  const orders = [];
+  const maxOrderCount = Number.isFinite(limit) ? limit : Number.POSITIVE_INFINITY;
+  const permutationLimit = partnerIds.length <= 3 ? Number.POSITIVE_INFINITY : maxOrderCount * 3;
+
+  function pushOrder(partnerOrder) {
+    if (orders.length >= maxOrderCount) return;
+    const ownerSequence = [meRoster.rosterId, ...partnerOrder];
+    const key = ownerSequence.join("|");
+    if (seen.has(key)) return;
+    seen.add(key);
+    orders.push(ownerSequence);
+  }
+
+  pushOrder(partnerIds);
+  pushOrder([...partnerIds].reverse());
+  buildRosterIdPermutations(partnerIds, permutationLimit).forEach(pushOrder);
+
+  return orders;
+}
+
+function buildRosterIdPermutations(rosterIds, limit = Number.POSITIVE_INFINITY) {
+  if (rosterIds.length <= 1) return [rosterIds];
+
+  const permutations = [];
+  const used = new Array(rosterIds.length).fill(false);
+  const current = [];
+
+  function walk() {
+    if (permutations.length >= limit) return true;
+    if (current.length === rosterIds.length) {
+      permutations.push([...current]);
+      return permutations.length >= limit;
+    }
+
+    for (let index = 0; index < rosterIds.length; index += 1) {
+      if (used[index]) continue;
+      used[index] = true;
+      current.push(rosterIds[index]);
+      const shouldStop = walk();
+      current.pop();
+      used[index] = false;
+      if (shouldStop) return true;
+    }
+
+    return false;
+  }
+
+  walk();
+  return permutations;
+}
+
+function scoreCustomMultiTeamAnchorPlan({
+  ownerSequence,
+  anchorAssetByOwner,
+  values,
+  candidateScoreTotal = 0,
+}) {
+  const anchorValues = ownerSequence
+    .map((ownerId) => getAssetValue(anchorAssetByOwner.get(ownerId), values))
+    .filter(Number.isFinite);
+  if (anchorValues.length !== ownerSequence.length) return Number.NEGATIVE_INFINITY;
+
+  const totalAnchorValue = anchorValues.reduce((sum, value) => sum + value, 0);
+  const avgAnchorValue = totalAnchorValue / Math.max(anchorValues.length, 1);
+  const maxAnchorValue = Math.max(...anchorValues);
+  const minAnchorValue = Math.min(...anchorValues);
+  const cyclicalGap = ownerSequence.reduce((sum, ownerId, index) => {
+    const previousOwnerId = ownerSequence[(index - 1 + ownerSequence.length) % ownerSequence.length];
+    const outgoingValue = getAssetValue(anchorAssetByOwner.get(ownerId), values);
+    const incomingValue = getAssetValue(anchorAssetByOwner.get(previousOwnerId), values);
+    return sum + Math.abs(outgoingValue - incomingValue);
+  }, 0);
+  const liquidityBonus = ownerSequence.reduce((sum, ownerId) => {
+    const asset = anchorAssetByOwner.get(ownerId);
+    if (isFirstRoundPick(asset)) return sum + 120;
+    if (asset.assetType === "pick") return sum + 70;
+    if (isYouthAsset(asset)) return sum + 45;
+    return sum;
+  }, 0);
+
+  return (
+    candidateScoreTotal * 0.3
+    + totalAnchorValue * 0.72
+    + avgAnchorValue * 0.88
+    + liquidityBonus
+    - cyclicalGap * 0.74
+    - (maxAnchorValue - minAnchorValue) * 0.42
+  );
+}
+
+function buildCustomMultiTeamAnchorPlans({
+  meRoster,
+  participantRosters,
+  values,
+  maxPlanCount = CUSTOM_MULTI_TEAM_PLAN_LIMIT,
+}) {
+  const participantCount = participantRosters.length;
+  const cycleOrders = buildCustomMultiTeamCycleOrders({
+    meRoster,
+    participantRosters,
+    limit: participantCount <= 4 ? Number.POSITIVE_INFINITY : CUSTOM_MULTI_TEAM_ORDER_LIMIT,
+  });
+  if (cycleOrders.length === 0) return [];
+
+  const candidateLists = participantRosters.map((roster) => ({
+    roster,
+    candidates: listCustomMultiTeamAnchorCandidates({
+      roster,
+      values,
+      participantCount,
+      isMyRoster: roster.rosterId === meRoster.rosterId,
+    }),
+  }));
+  if (candidateLists.some((entry) => entry.candidates.length === 0)) return [];
+
+  const plans = [];
+  const seen = new Set();
+  const selection = [];
+
+  function walk(index, candidateScoreTotal) {
+    if (index >= candidateLists.length) {
+      const anchorAssetByOwner = new Map(
+        selection.map((entry) => [entry.roster.rosterId, entry.candidate.asset])
+      );
+
+      cycleOrders.forEach((ownerSequence) => {
+        const anchorTransfers = ownerSequence.map((ownerId, sequenceIndex) => ({
+          fromRosterId: ownerId,
+          toRosterId: ownerSequence[(sequenceIndex + 1) % ownerSequence.length],
+          asset: anchorAssetByOwner.get(ownerId),
+          isRequested: true,
+        }));
+        const key = anchorTransfers
+          .map((transfer) => `${transfer.fromRosterId}:${transfer.asset?.assetId || "none"}->${transfer.toRosterId}`)
+          .join("|");
+        if (seen.has(key)) return;
+        seen.add(key);
+        plans.push({
+          participantRosters,
+          anchorTransfers,
+          score: scoreCustomMultiTeamAnchorPlan({
+            ownerSequence,
+            anchorAssetByOwner,
+            values,
+            candidateScoreTotal,
+          }),
+        });
+      });
+      return;
+    }
+
+    const entry = candidateLists[index];
+    entry.candidates.forEach((candidate) => {
+      selection.push({ roster: entry.roster, candidate });
+      walk(index + 1, candidateScoreTotal + candidate.score);
+      selection.pop();
+    });
+  }
+
+  walk(0, 0);
+
+  return plans
+    .filter((plan) => Number.isFinite(plan.score))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, maxPlanCount);
 }
 
 function generateAutoMultiTeamIdeas({
