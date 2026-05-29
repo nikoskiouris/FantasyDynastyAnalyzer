@@ -12,8 +12,26 @@
         <header class="app-header">
           <p class="eyebrow">Fantasy Dynasty Analyzer</p>
           <h1>Fantasy Dynasty Trade Generator</h1>
-          <p class="hero-lede">Load a Sleeper league, choose your roster, target a player or pick, and generate trade ideas that stay close to market.</p>
+          <p class="hero-lede">Load your Sleeper league, choose your team, then either find trades for a player you want, shop one of your own assets, or build a multi-team framework where you lock in the key pieces and let the solver balance the rest.</p>
         </header>
+
+        <section class="overview-grid" aria-label="Primary workflows">
+          <article class="overview-card">
+            <p class="eyebrow">Path 1</p>
+            <h2>Target a player or pick</h2>
+            <p>Search another roster and generate realistic offers to go get that asset.</p>
+          </article>
+          <article class="overview-card">
+            <p class="eyebrow">Path 2</p>
+            <h2>Shop one of your assets</h2>
+            <p>Pick a player or pick you already own and see the best return packages from around the league.</p>
+          </article>
+          <article class="overview-card">
+            <p class="eyebrow">Path 3</p>
+            <h2>Build a multi-team framework</h2>
+            <p>Select the owners involved, lock in the must-have pieces, and let the solver even out the rest.</p>
+          </article>
+        </section>
 
         <div class="workflow-shell">
           <section class="card stage-card stage-lead">
@@ -58,23 +76,22 @@
             <div class="section-heading">
               <div class="section-kicker">
                 <span class="step-badge">03</span>
-                <span class="eyebrow">Trade Plan</span>
+                <span class="eyebrow">Workflow</span>
               </div>
-              <h2>Set the trade path</h2>
-              <p class="section-copy">Pick whether you want to go get someone, shop one of your own assets, or build a multi-team structure.</p>
+              <h2>Choose what you want to build</h2>
+              <p class="section-copy">Pick the type of trade first. The inputs below will simplify themselves around that choice.</p>
             </div>
             <div class="grid mode-grid">
               <label>
-                Trade mode
+                What do you want to do?
                 <select id="trade-mode-select">
-                  <option value="acquire">Go get a player or pick</option>
-                  <option value="shop">Shop one of my assets</option>
-                  <option value="multi-target">Use a multi-team route to get a target</option>
-                  <option value="multi-custom">Build a custom multi-team trade</option>
+                  <option value="acquire">Find trades for a player or pick I want</option>
+                  <option value="shop">Shop a player or pick I own</option>
+                  <option value="multi-custom">Build a multi-team trade with selected owners</option>
                 </select>
               </label>
               <label>
-                Trade tier
+                Trade shape
                 <select id="trade-tier-select">
                   <option value="all">Show all tiers</option>
                   <option value="level-up">Level up</option>
@@ -82,16 +99,12 @@
                   <option value="break-down">Break down</option>
                 </select>
               </label>
-              <label id="multi-team-count-wrap" class="hidden">
-                Total teams in the trade
-                <select id="multi-team-count-select"></select>
-              </label>
               <label id="custom-team-count-wrap" class="hidden">
-                Other teams involved
+                How many other teams are involved?
                 <select id="custom-team-count-select"></select>
               </label>
             </div>
-            <p id="trade-mode-help" class="muted small mode-note">Pick a path, then choose the asset you want to build around.</p>
+            <p id="trade-mode-help" class="muted small mode-note">Pick a path, then choose the main asset or framework you want the solver to build around.</p>
             <label id="player-search-label" for="player-search">Search players and picks on other rosters</label>
             <div id="target-search-shell" class="target-search-shell">
               <div id="target-chip" class="selected-token hidden">
@@ -103,8 +116,8 @@
             <div id="player-results" class="list"></div>
             <div id="multi-custom-panel" class="multi-team-builder hidden">
               <div class="section-heading compact-heading">
-                <h3>Custom Multi-Team Framework</h3>
-                <p class="section-copy">Choose the other teams, then assign the one asset each team wants back. The generator will try to close the full cycle and add balancing pieces where needed.</p>
+                <h3>Multi-Team Builder</h3>
+                <p class="section-copy">Choose the other owners, then lock in one must-include incoming asset for each team in the trade. The algorithm will fill out the rest of the deal to make the structure work.</p>
               </div>
               <div id="multi-custom-team-slots" class="multi-team-slot-list"></div>
               <div id="multi-custom-wants" class="multi-team-wants-list"></div>
@@ -115,10 +128,10 @@
             <div class="section-heading">
               <div class="section-kicker">
                 <span class="step-badge">04</span>
-                <span class="eyebrow">Your Side</span>
+                <span class="eyebrow">Asset Rules</span>
               </div>
               <h2>Optional asset controls</h2>
-              <p class="section-copy">Use these only if you want to limit which assets can appear in the offers.</p>
+              <p class="section-copy">Use these only if you want to force certain assets into every idea or protect assets from being used.</p>
             </div>
 
             <div class="builder-choice">
@@ -162,49 +175,10 @@
             </div>
           </section>
 
-          <section class="card stage-card hidden" id="market-section">
-            <div class="section-heading">
-              <div class="section-kicker">
-                <span class="step-badge">05</span>
-                <span class="eyebrow">League Settings</span>
-              </div>
-              <h2>League context</h2>
-              <p class="section-copy">Set the few league tendencies that most affect pricing.</p>
-            </div>
-            <div class="grid">
-              <label>
-                Premium position
-                <select id="position-premium-select">
-                  <option value="none">No clear premium</option>
-                  <option value="QB">Quarterbacks</option>
-                  <option value="RB">Running backs</option>
-                  <option value="WR">Wide receivers</option>
-                  <option value="TE">Tight ends</option>
-                </select>
-              </label>
-              <label>
-                Trade style
-                <select id="trade-vibe-select">
-                  <option value="balanced">Balanced</option>
-                  <option value="aggressive">Aggressive</option>
-                  <option value="chaos">Loose</option>
-                </select>
-              </label>
-              <label>
-                Team direction
-                <select id="team-state-select">
-                  <option value="middle">Middle</option>
-                  <option value="rebuilding">Rebuilding</option>
-                  <option value="contending">Contending</option>
-                </select>
-              </label>
-            </div>
-          </section>
-
           <section class="card stage-card hidden" id="settings-section">
             <div class="section-heading">
               <div class="section-kicker">
-                <span class="step-badge">06</span>
+                <span class="step-badge">05</span>
                 <span class="eyebrow">Generate</span>
               </div>
               <h2>Generate offers</h2>
@@ -223,7 +197,7 @@
           <section class="card stage-card hidden results-shell" id="results-section">
             <div class="section-heading">
               <div class="section-kicker">
-                <span class="step-badge accent">07</span>
+                <span class="step-badge accent">06</span>
                 <span class="eyebrow">Results</span>
               </div>
               <h2>Results</h2>

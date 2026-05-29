@@ -67,9 +67,44 @@ body {
 }
 
 .app-header {
-  margin-bottom: 2rem;
-  padding-bottom: 1.5rem;
-  border-bottom: 1px solid var(--border);
+  margin-bottom: 1rem;
+  padding: 1.8rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  background:
+    radial-gradient(circle at top right, rgba(39, 82, 214, 0.12), transparent 34%),
+    linear-gradient(180deg, #fffdf8 0%, #ffffff 100%);
+  box-shadow: var(--shadow-md);
+}
+
+.overview-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.85rem;
+  margin-bottom: 1rem;
+}
+
+.overview-card {
+  padding: 1rem 1.05rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.86);
+  box-shadow: var(--shadow-sm);
+}
+
+.overview-card h2,
+.overview-card p {
+  margin-bottom: 0;
+}
+
+.overview-card h2 {
+  margin-bottom: 0.45rem;
+  font-size: 1.08rem;
+  line-height: 1.12;
+}
+
+.overview-card .eyebrow {
+  margin-bottom: 0.45rem;
 }
 
 .workflow-shell {
@@ -168,10 +203,6 @@ h5 {
 
 .stage-card {
   padding: 1.5rem;
-}
-
-.stage-lead {
-  box-shadow: var(--shadow-md);
 }
 
 .section-heading {
@@ -579,6 +610,10 @@ button:disabled {
 .multi-team-wants-list {
   display: grid;
   gap: 0.85rem;
+}
+
+.builder-note {
+  margin: 0;
 }
 
 .multi-team-slot-list {
@@ -1184,6 +1219,10 @@ button:disabled {
 }
 
 @media (max-width: 860px) {
+  .overview-grid {
+    grid-template-columns: 1fr;
+  }
+
   .trade-body-grid,
   .impact-overview,
   .lineup-comparison-grid {
