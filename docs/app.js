@@ -460,7 +460,9 @@ function buildCustomWantOptionsForRoster(rosterId) {
     .map((roster) => ({
       rosterId: roster.rosterId,
       managerName: roster.manager.displayName,
-      assets: [...roster.assets].sort((a, b) => sortAssetsByValueDesc(a, b, state.values)),
+      assets: [...roster.assets]
+        .filter(isTradeEligibleAsset)
+        .sort((a, b) => sortAssetsByValueDesc(a, b, state.values)),
     }));
 }
 
@@ -958,7 +960,18 @@ function getMyRoster() {
   return state.normalizedRosters.find((roster) => roster.rosterId === meRosterId) || null;
 }
 
+function isTradeEligibleAsset(asset) {
+  if (!asset) return false;
+  if (asset.assetType === "pick") return true;
+  if (asset.assetType !== "player") return false;
+
+  const positions = playerPositionsForAsset(asset);
+  if (positions.length === 0) return true;
+  return !positions.some((position) => position === "K" || position === "DEF");
+}
+
 function assetTypeAllowed(asset, filters) {
+  if (!isTradeEligibleAsset(asset)) return false;
   return (asset.assetType === "player" && filters.players) || (asset.assetType === "pick" && filters.picks);
 }
 
@@ -1075,7 +1088,7 @@ function pruneSelectedOutgoingAssets() {
     return;
   }
 
-  const validAssetIds = new Set(meRoster.assets.map((asset) => asset.assetId));
+  const validAssetIds = new Set(meRoster.assets.filter(isTradeEligibleAsset).map((asset) => asset.assetId));
   state.selectedOutgoingAssetIds = new Set(
     [...state.selectedOutgoingAssetIds].filter(
       (assetId) => validAssetIds.has(assetId) && !state.excludedOutgoingAssetIds.has(assetId)
@@ -1090,7 +1103,7 @@ function pruneExcludedOutgoingAssets() {
     return;
   }
 
-  const validAssetIds = new Set(meRoster.assets.map((asset) => asset.assetId));
+  const validAssetIds = new Set(meRoster.assets.filter(isTradeEligibleAsset).map((asset) => asset.assetId));
   state.excludedOutgoingAssetIds = new Set(
     [...state.excludedOutgoingAssetIds].filter((assetId) => validAssetIds.has(assetId))
   );
@@ -2865,6 +2878,7 @@ function suggestShopDealsWithRoster({
 
 function buildWindowedCounterpartyPool(assets, values, referenceValue) {
   return assets
+    .filter(isTradeEligibleAsset)
     .map((asset) => ({ asset, value: getAssetValue(asset, values) }))
     .filter((entry) => Number.isFinite(entry.value))
     .sort((a, b) => {
@@ -2993,6 +3007,10 @@ function resolveCustomMultiTeamSetup() {
     if (!ownerRoster) {
       return { ok: false, message: "Each locked-in asset has to come from one of the owners in this trade." };
     }
+    const wantedAsset = findAssetOnRoster(ownerRoster, wantedAssetId);
+    if (!isTradeEligibleAsset(wantedAsset)) {
+      return { ok: false, message: "Kickers and defenses cannot be locked into trades." };
+    }
     if (ownerRoster.rosterId === recipientRoster.rosterId) {
       return { ok: false, message: `${recipientRoster.manager.displayName} cannot ask to receive an asset already on that roster.` };
     }
@@ -3000,7 +3018,7 @@ function resolveCustomMultiTeamSetup() {
     anchorTransfers.push({
       fromRosterId: ownerRoster.rosterId,
       toRosterId: recipientRoster.rosterId,
-      asset: findAssetOnRoster(ownerRoster, wantedAssetId),
+      asset: wantedAsset,
       isRequested: true,
     });
   }
@@ -3401,6 +3419,7 @@ function buildAvailableMultiTeamFillerAssets({
   const isMyRoster = participantState.roster.rosterId === meRoster.rosterId;
 
   return participantState.roster.assets
+    .filter(isTradeEligibleAsset)
     .filter((asset) => Number.isFinite(getAssetValue(asset, values)))
     .filter((asset) => !sentAssetIds.has(asset.assetId))
     .filter((asset) => !isMyRoster || !state.excludedOutgoingAssetIds.has(asset.assetId))
@@ -4604,6 +4623,7 @@ function scoreAutoMultiTeamHelperRoster(roster, targetValue, values, helperCount
   const helperCap = targetValue * AUTO_MULTI_TEAM_HELPER_ANCHOR_CAP_SHARE;
   const coreAssetIds = getCoreAssetIdSet(roster, values);
   const topAssets = roster.assets
+    .filter(isTradeEligibleAsset)
     .map((asset) => ({ asset, value: getAssetValue(asset, values) }))
     .filter((entry) => Number.isFinite(entry.value))
     .sort((a, b) => b.value - a.value)
@@ -4694,6 +4714,7 @@ function listAutoMultiTeamAnchorCandidates({
   const targetBand = Number.isFinite(desiredValue) && desiredValue > 0 ? desiredValue : fallbackDesiredValue;
 
   return roster.assets
+    .filter(isTradeEligibleAsset)
     .filter((asset) => Number.isFinite(getAssetValue(asset, values)))
     .filter((asset) => !usedAssetIds.has(asset.assetId))
     .filter((asset) => !isMyRoster || !state.excludedOutgoingAssetIds.has(asset.assetId))
@@ -5030,6 +5051,7 @@ function buildSupplementAssetPool({
 }) {
   const requiredSet = new Set(requiredExtraAssetIds);
   const allCandidates = roster.assets
+    .filter(isTradeEligibleAsset)
     .filter((asset) => !lockedAnchorIds.has(asset.assetId))
     .filter((asset) => Number.isFinite(getAssetValue(asset, values)))
     .filter((asset) => !participantIsMe || !state.excludedOutgoingAssetIds.has(asset.assetId));
@@ -5215,10 +5237,13 @@ function buildTradeSearchContext({ myRoster, targetAsset, values, fairnessPct, t
 
 function resolveOutgoingAssetPool({ myRoster, values, tradeLab, targetValue = 0, coreAssetIds = null }) {
   const pool = myRoster.assets.filter((asset) =>
+    isTradeEligibleAsset(asset)
+    && (
     !tradeLab.excludedOutgoingAssetIds.has(asset.assetId)
     && (
       (asset.assetType === "player" && tradeLab.allowPlayers)
       || (asset.assetType === "pick" && tradeLab.allowPicks)
+    )
     )
   );
 
@@ -5883,6 +5908,7 @@ function buildTargetPackages({
   const maxThrowInTotalValue = Math.max(maxThrowInValue, Math.round(targetValue * maxExtraTotalShare));
   const extras = theirRoster.assets
     .filter((asset) => asset.assetId !== targetAsset.assetId)
+    .filter(isTradeEligibleAsset)
     .map((asset) => ({ asset, value: getAssetValue(asset, values) }))
     .filter((entry) => Number.isFinite(entry.value) && entry.value <= maxThrowInValue)
     .sort((a, b) => a.value - b.value);
@@ -6048,7 +6074,7 @@ function isFirstRoundPick(asset) {
 
 function getCoreAssetIdSet(myRoster, values) {
   const topPlayers = myRoster.assets
-    .filter((asset) => asset.assetType === "player")
+    .filter((asset) => asset.assetType === "player" && isTradeEligibleAsset(asset))
     .map((asset) => ({ assetId: asset.assetId, value: getAssetValue(asset, values) }))
     .sort((a, b) => b.value - a.value)
     .slice(0, 4)
