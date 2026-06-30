@@ -361,13 +361,8 @@ function renderSessionSnapshot() {
 }
 
 function scrollLoadedWorkspaceIntoView() {
-  if (!el.identitySection || el.identitySection.classList.contains("hidden")) return;
   requestAnimationFrame(() => {
-    if (window.matchMedia?.("(max-width: 720px)").matches) {
-      window.scrollTo({ top: 0, behavior: "smooth" });
-      return;
-    }
-    el.identitySection.scrollIntoView({ behavior: "smooth", block: "start" });
+    window.scrollTo({ top: 0, behavior: "smooth" });
   });
 }
 
