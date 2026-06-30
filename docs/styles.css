@@ -502,6 +502,7 @@ button.loading {
 .workspace-panel,
 .analytics-panel,
 .action-panel {
+  min-width: 0;
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--panel);
@@ -561,7 +562,8 @@ button.loading {
 }
 
 .power-hero,
-.analytics-hero {
+.analytics-hero,
+.league-archive-hero {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
   gap: 1rem;
@@ -572,7 +574,8 @@ button.loading {
   background: var(--panel-soft);
 }
 
-.analytics-hero {
+.analytics-hero,
+.league-archive-hero {
   grid-template-columns: minmax(0, 1fr) 150px;
 }
 
@@ -890,7 +893,9 @@ button.loading {
   text-transform: uppercase;
 }
 
-.gm-level-panel {
+.gm-level-panel,
+.trophy-panel,
+.manager-score {
   display: grid;
   place-items: center;
   padding: 0.85rem;
@@ -901,16 +906,284 @@ button.loading {
 }
 
 .gm-level-panel span,
-.gm-level-panel small {
+.gm-level-panel small,
+.trophy-panel span,
+.trophy-panel small,
+.manager-score span,
+.manager-score small {
   color: var(--muted);
   font-size: 0.72rem;
   font-weight: 800;
 }
 
-.gm-level-panel strong {
+.gm-level-panel strong,
+.trophy-panel strong,
+.manager-score strong {
   color: var(--blue);
-  font-size: 2.1rem;
+  overflow-wrap: anywhere;
+  font-size: 1.55rem;
   line-height: 1;
+}
+
+.trophy-panel strong {
+  font-size: 1.1rem;
+}
+
+.manager-score strong {
+  color: var(--green);
+  font-size: 2.1rem;
+}
+
+.season-ledger,
+.dynasty-table,
+.storyline-list,
+.mini-season-list {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.season-card {
+  display: grid;
+  grid-template-columns: 92px repeat(5, minmax(0, 1fr));
+  gap: 0.65rem;
+  align-items: stretch;
+  padding: 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel-soft);
+}
+
+.season-card.current {
+  border-color: var(--team-a-border);
+  background: var(--team-a-soft);
+}
+
+.season-card-title,
+.season-stat,
+.manager-lens-stat {
+  display: grid;
+  gap: 0.2rem;
+  min-width: 0;
+  padding: 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: #fff;
+}
+
+.season-card-title {
+  place-content: center;
+  text-align: center;
+}
+
+.season-card-title strong {
+  font-size: 1.2rem;
+}
+
+.season-card-title span,
+.season-stat span,
+.season-stat small,
+.manager-lens-stat span,
+.mini-season-chip span {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 760;
+}
+
+.season-stat strong,
+.manager-lens-stat strong {
+  overflow-wrap: anywhere;
+  font-size: 0.92rem;
+  line-height: 1.12;
+}
+
+.dynasty-row {
+  display: grid;
+  grid-template-columns: 2rem minmax(0, 1fr) minmax(70px, 0.45fr) minmax(86px, 0.55fr) 4rem;
+  gap: 0.65rem;
+  align-items: center;
+  padding: 0.65rem 0.72rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel-soft);
+}
+
+.dynasty-row.selected,
+.finish-matrix-name.selected {
+  border-color: var(--team-a-border);
+  background: var(--team-a-soft);
+}
+
+.dynasty-row div {
+  min-width: 0;
+}
+
+.dynasty-row span {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 680;
+}
+
+.dynasty-row > strong {
+  text-align: right;
+}
+
+.manager-lens-panel {
+  align-content: start;
+}
+
+.manager-lens-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 112px;
+  gap: 0.75rem;
+  align-items: stretch;
+  margin-bottom: 0.75rem;
+}
+
+.manager-lens-hero > div:first-child {
+  min-width: 0;
+  padding: 0.85rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel-soft);
+}
+
+.manager-lens-hero strong {
+  display: block;
+  margin-bottom: 0.35rem;
+  overflow-wrap: anywhere;
+}
+
+.manager-lens-hero p {
+  margin-bottom: 0;
+  color: var(--muted-strong);
+  font-size: 0.84rem;
+}
+
+.manager-lens-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.55rem;
+  margin-bottom: 0.75rem;
+}
+
+.mini-season-chip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.48rem 0.58rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: #fff;
+}
+
+.mini-season-chip.current {
+  border-color: var(--team-b-border);
+  background: var(--team-b-soft);
+}
+
+.finish-matrix-shell {
+  overflow-x: auto;
+  padding-bottom: 0.15rem;
+}
+
+.finish-matrix {
+  display: grid;
+  grid-template-columns: minmax(150px, 1.2fr) repeat(var(--season-count), minmax(64px, 0.55fr));
+  gap: 0.42rem;
+  min-width: max-content;
+}
+
+.finish-matrix-head,
+.finish-matrix-name,
+.finish-cell {
+  min-height: 2.55rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: #fff;
+}
+
+.finish-matrix-head {
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 840;
+  text-transform: uppercase;
+}
+
+.finish-matrix-name {
+  display: grid;
+  gap: 0.05rem;
+  align-content: center;
+  padding: 0.45rem 0.58rem;
+  background: var(--panel-soft);
+}
+
+.finish-matrix-name strong {
+  overflow-wrap: anywhere;
+  font-size: 0.82rem;
+}
+
+.finish-matrix-name span {
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 760;
+}
+
+.finish-cell {
+  display: grid;
+  place-items: center;
+  color: var(--muted-strong);
+  font-size: 0.84rem;
+  font-weight: 860;
+}
+
+.finish-cell.title {
+  border-color: #f0c45a;
+  background: var(--amber-soft);
+  color: var(--amber);
+}
+
+.finish-cell.podium {
+  border-color: var(--team-a-border);
+  background: var(--team-a-soft);
+  color: var(--blue);
+}
+
+.finish-cell.current {
+  border-color: var(--team-b-border);
+  background: var(--team-b-soft);
+  color: var(--teal);
+}
+
+.finish-cell.bottom {
+  border-color: #f0b8c5;
+  background: var(--red-soft);
+  color: var(--red);
+}
+
+.finish-cell.empty {
+  border-style: dashed;
+  color: var(--line-strong);
+}
+
+.storyline-card {
+  display: grid;
+  gap: 0.22rem;
+  padding: 0.72rem;
+  border-left: 3px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: #fff;
+}
+
+.storyline-card strong {
+  font-size: 0.84rem;
+}
+
+.storyline-card span {
+  color: var(--muted);
+  font-size: 0.8rem;
 }
 
 .dna-grid,
@@ -1828,20 +2101,26 @@ button.loading {
   .power-progress-pair,
   .dna-grid,
   .economy-grid,
-  .market-split-grid {
+  .market-split-grid,
+  .season-card {
     grid-template-columns: 1fr;
   }
 
-  .analytics-hero {
+  .analytics-hero,
+  .league-archive-hero,
+  .manager-lens-hero {
     grid-template-columns: 1fr;
   }
 
-  .power-rank-row {
+  .power-rank-row,
+  .dynasty-row {
     grid-template-columns: 2rem minmax(0, 1fr) 3rem;
   }
 
   .power-rank-row > span:nth-of-type(2),
-  .power-rank-row > span:nth-of-type(3) {
+  .power-rank-row > span:nth-of-type(3),
+  .dynasty-row > span:nth-of-type(2),
+  .dynasty-row > span:nth-of-type(3) {
     display: none;
   }
 
@@ -1864,7 +2143,8 @@ button.loading {
   .state-grid,
   .power-stat-grid,
   .analytics-metric-grid,
-  .power-hero {
+  .power-hero,
+  .manager-lens-grid {
     grid-template-columns: 1fr;
   }
 

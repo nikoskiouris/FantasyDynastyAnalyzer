@@ -78,6 +78,8 @@ const TRANSACTION_WEEK_FALLBACK_END = 18;
 const ANALYTICS_RECENT_TRADE_LIMIT = 6;
 const ANALYTICS_POWER_RANK_LIMIT = 12;
 const ANALYTICS_ASSET_LEADER_LIMIT = 8;
+const MAX_HISTORY_SEASONS = 6;
+const HISTORY_TRANSACTION_SEASON_LIMIT = 4;
 
 const state = {
   leagueId: "",
@@ -89,6 +91,7 @@ const state = {
   previousLeague: null,
   previousUsers: [],
   previousRosters: [],
+  leagueHistory: [],
   normalizedRosters: [],
   meRosterId: null,
   targetAsset: null,
@@ -123,6 +126,11 @@ const state = {
   transactionsFailed: false,
   transactionWeeksLoaded: 0,
   transactionLoadError: "",
+  historyTransactions: [],
+  historyTransactionsLoaded: false,
+  historyTransactionsFailed: false,
+  historyTransactionLeaguesLoaded: 0,
+  historyTransactionLoadError: "",
 };
 
 const el = {
@@ -438,6 +446,12 @@ async function loadLeague() {
   state.transactionsFailed = false;
   state.transactionWeeksLoaded = 0;
   state.transactionLoadError = "";
+  state.leagueHistory = [];
+  state.historyTransactions = [];
+  state.historyTransactionsLoaded = false;
+  state.historyTransactionsFailed = false;
+  state.historyTransactionLeaguesLoaded = 0;
+  state.historyTransactionLoadError = "";
   if (el.playerSearch) el.playerSearch.value = "";
   renderSessionSnapshot();
   renderPowerDashboard();
@@ -449,8 +463,17 @@ async function loadLeague() {
   el.resultsSection.classList.add("hidden");
 
   try {
-    const { league, users, rosters, tradedPicks, drafts } = await loadLeagueCoreData(leagueId);
-    const previousContext = await loadPreviousLeagueContext(league);
+    const coreData = await loadLeagueCoreData(leagueId);
+    const { league, users, rosters, tradedPicks, drafts } = coreData;
+    const leagueHistory = await loadLeagueHistoryContext(leagueId, coreData);
+    const previousEntry = leagueHistory.find((entry) => !entry.isCurrent) || null;
+    const previousContext = previousEntry
+      ? {
+          league: previousEntry.league,
+          users: previousEntry.users,
+          rosters: previousEntry.rosters,
+        }
+      : { league: null, users: [], rosters: [] };
     const currentDraftContext = await loadCurrentSeasonDraftContext(leagueId, league, rosters, drafts);
 
     state.leagueId = leagueId;
@@ -464,6 +487,7 @@ async function loadLeague() {
     state.previousLeague = previousContext.league;
     state.previousUsers = previousContext.users;
     state.previousRosters = previousContext.rosters;
+    state.leagueHistory = leagueHistory;
     state.normalizedRosters = normalizeRosters(league, rosters, users, state.players, previousContext, tradedPicks, currentDraftContext);
 
     hydrateManagerSelector();
@@ -482,6 +506,7 @@ async function loadLeague() {
     primeValuationData();
     loadTrendingPlayers();
     loadLeagueTransactions(leagueId, league);
+    loadLeagueHistoryTransactions(leagueHistory);
 
     loadPlayersWithCache()
       .then((players) => {
@@ -568,6 +593,8 @@ async function loadLeagueCoreData(leagueId) {
     { key: "rosters", label: "league rosters", path: `/league/${leagueId}/rosters` },
     { key: "tradedPicks", label: "traded picks", path: `/league/${leagueId}/traded_picks`, optional: true },
     { key: "drafts", label: "league drafts", path: `/league/${leagueId}/drafts`, optional: true },
+    { key: "winnersBracket", label: "playoff bracket", path: `/league/${leagueId}/winners_bracket`, optional: true },
+    { key: "losersBracket", label: "consolation bracket", path: `/league/${leagueId}/losers_bracket`, optional: true },
   ];
 
   const tasks = endpointPlan.map(async (endpoint) => {
@@ -599,6 +626,8 @@ async function loadLeagueCoreData(leagueId) {
     rosters: byKey.rosters,
     tradedPicks: Array.isArray(byKey.tradedPicks) ? byKey.tradedPicks : [],
     drafts: Array.isArray(byKey.drafts) ? byKey.drafts : [],
+    winnersBracket: Array.isArray(byKey.winnersBracket) ? byKey.winnersBracket : [],
+    losersBracket: Array.isArray(byKey.losersBracket) ? byKey.losersBracket : [],
   };
 }
 
@@ -684,6 +713,45 @@ async function loadCurrentSeasonDraftContext(leagueId, league, rosters, drafts =
   }
 
   return null;
+}
+
+function buildLeagueHistoryEntry(leagueId, coreData, isCurrent = false) {
+  return {
+    leagueId: String(leagueId || coreData?.league?.league_id || ""),
+    season: String(coreData?.league?.season || ""),
+    isCurrent,
+    league: coreData?.league || null,
+    users: Array.isArray(coreData?.users) ? coreData.users : [],
+    rosters: Array.isArray(coreData?.rosters) ? coreData.rosters : [],
+    tradedPicks: Array.isArray(coreData?.tradedPicks) ? coreData.tradedPicks : [],
+    drafts: Array.isArray(coreData?.drafts) ? coreData.drafts : [],
+    winnersBracket: Array.isArray(coreData?.winnersBracket) ? coreData.winnersBracket : [],
+    losersBracket: Array.isArray(coreData?.losersBracket) ? coreData.losersBracket : [],
+  };
+}
+
+async function loadLeagueHistoryContext(currentLeagueId, currentCoreData) {
+  const entries = [buildLeagueHistoryEntry(currentLeagueId, currentCoreData, true)];
+  const seenLeagueIds = new Set([String(currentLeagueId || "")]);
+  let previousLeagueId = currentCoreData?.league?.previous_league_id;
+
+  for (let depth = 1; depth < MAX_HISTORY_SEASONS && previousLeagueId; depth += 1) {
+    const historyLeagueId = String(previousLeagueId);
+    if (seenLeagueIds.has(historyLeagueId)) break;
+    seenLeagueIds.add(historyLeagueId);
+
+    try {
+      setStatus(`Loading league archive season ${depth + 1}...`, { loading: true });
+      const historicalCore = await loadLeagueCoreData(historyLeagueId);
+      entries.push(buildLeagueHistoryEntry(historyLeagueId, historicalCore, false));
+      previousLeagueId = historicalCore?.league?.previous_league_id;
+    } catch (err) {
+      console.warn(`Could not load historical league ${historyLeagueId}`, err);
+      break;
+    }
+  }
+
+  return entries;
 }
 
 async function loadPreviousLeagueContext(league) {
@@ -797,6 +865,76 @@ async function loadLeagueTransactions(leagueId, league) {
   }
 }
 
+async function loadLeagueHistoryTransactions(historyEntries = []) {
+  const activeLeagueId = state.leagueId;
+  const historicalEntries = historyEntries
+    .filter((entry) => entry && !entry.isCurrent && entry.leagueId)
+    .slice(0, HISTORY_TRANSACTION_SEASON_LIMIT);
+
+  state.historyTransactions = [];
+  state.historyTransactionsLoaded = historicalEntries.length === 0;
+  state.historyTransactionsFailed = false;
+  state.historyTransactionLeaguesLoaded = 0;
+  state.historyTransactionLoadError = "";
+  renderLeagueAnalyticsDashboard();
+
+  if (historicalEntries.length === 0) return;
+
+  const transactions = [];
+  let loadedLeagues = 0;
+  try {
+    for (const entry of historicalEntries) {
+      if (state.leagueId !== activeLeagueId) return;
+      const weeks = buildTransactionWeeks(entry.league);
+      const settled = await Promise.allSettled(
+        weeks.map((week) =>
+          apiGetWithRetry(`/league/${entry.leagueId}/transactions/${week}`, { timeoutMs: 10000, retries: 1 })
+            .then((weekTransactions) => ({
+              week,
+              transactions: Array.isArray(weekTransactions) ? weekTransactions : [],
+            }))
+        )
+      );
+
+      let loadedWeeks = 0;
+      settled.forEach((result) => {
+        if (result.status !== "fulfilled") return;
+        loadedWeeks += 1;
+        result.value.transactions.forEach((transaction) => {
+          transactions.push({
+            ...transaction,
+            leg: transaction?.leg ?? result.value.week,
+            week: result.value.week,
+            sourceLeagueId: entry.leagueId,
+            sourceSeason: entry.season,
+          });
+        });
+      });
+
+      if (loadedWeeks > 0) loadedLeagues += 1;
+    }
+
+    if (state.leagueId !== activeLeagueId) return;
+    state.historyTransactions = dedupeTransactionsByLeague(transactions);
+    state.historyTransactionsLoaded = true;
+    state.historyTransactionsFailed = loadedLeagues === 0;
+    state.historyTransactionLeaguesLoaded = loadedLeagues;
+    state.historyTransactionLoadError = loadedLeagues === 0
+      ? "Sleeper did not return archived transaction weeks for this league."
+      : "";
+  } catch (err) {
+    if (state.leagueId !== activeLeagueId) return;
+    state.historyTransactions = [];
+    state.historyTransactionsLoaded = true;
+    state.historyTransactionsFailed = true;
+    state.historyTransactionLoadError = err.message || "Could not load archived Sleeper transactions.";
+  } finally {
+    if (state.leagueId === activeLeagueId) {
+      renderLeagueAnalyticsDashboard();
+    }
+  }
+}
+
 function buildTransactionWeeks(league) {
   const playoffStart = Number(league?.settings?.playoff_week_start);
   const tradeDeadline = Number(league?.settings?.trade_deadline);
@@ -819,6 +957,19 @@ function dedupeTransactions(transactions) {
     const transactionId = String(transaction?.transaction_id || "");
     if (!transactionId || byId.has(transactionId)) return;
     byId.set(transactionId, transaction);
+  });
+  return [...byId.values()].sort((a, b) => Number(b.status_updated || b.created || 0) - Number(a.status_updated || a.created || 0));
+}
+
+function dedupeTransactionsByLeague(transactions) {
+  const byId = new Map();
+  transactions.forEach((transaction) => {
+    const transactionId = String(transaction?.transaction_id || "");
+    if (!transactionId) return;
+    const sourceLeagueId = String(transaction?.sourceLeagueId || transaction?.league_id || "");
+    const key = `${sourceLeagueId}:${transactionId}`;
+    if (byId.has(key)) return;
+    byId.set(key, transaction);
   });
   return [...byId.values()].sort((a, b) => Number(b.status_updated || b.created || 0) - Number(a.status_updated || a.created || 0));
 }
@@ -1035,6 +1186,13 @@ function buildLeagueAnalyticsModel(meRoster) {
   const rosterAnalytics = buildRosterAnalytics(meRoster, meProfile, context, profiles, market);
   const leagueAnalytics = buildLeagueAnalytics(context, profiles, market);
   const quests = buildAnalyticsQuests(meProfile, rosterAnalytics, leagueAnalytics, market);
+  const history = buildLeagueHistoryArchive({
+    meRoster,
+    meProfile,
+    profiles,
+    market,
+    leagueAnalytics,
+  });
 
   return {
     meRoster,
@@ -1045,67 +1203,952 @@ function buildLeagueAnalyticsModel(meRoster) {
     rosterAnalytics,
     leagueAnalytics,
     quests,
+    history,
   };
 }
 
+function buildLeagueHistoryArchive({ meRoster, meProfile, profiles, market, leagueAnalytics }) {
+  const historyEntries = state.leagueHistory.length > 0
+    ? state.leagueHistory
+    : [buildLeagueHistoryEntry(state.leagueId, {
+        league: state.league,
+        users: state.users,
+        rosters: state.rosters,
+        tradedPicks: state.tradedPicks,
+      }, true)];
+  const archiveTrades = buildArchiveTradeAnalytics(getArchiveTradeTransactions());
+  const seasonSnapshots = historyEntries
+    .map((entry) => buildSeasonSnapshot(entry, archiveTrades.byLeagueId.get(String(entry.leagueId))))
+    .filter(Boolean)
+    .sort((a, b) => Number(b.season) - Number(a.season) || Number(b.isCurrent) - Number(a.isCurrent));
+  const dynastyRows = buildDynastyRows(seasonSnapshots, profiles);
+  const managerLens = buildManagerHistoryLens(meRoster, meProfile, seasonSnapshots, dynastyRows, market);
+  const storylines = buildLeagueStorylines(seasonSnapshots, dynastyRows, archiveTrades, leagueAnalytics);
+  const completedSnapshots = seasonSnapshots.filter((snapshot) => !snapshot.isCurrent);
+  const championKeys = new Set(
+    completedSnapshots
+      .map((snapshot) => snapshot.champion?.managerKey)
+      .filter(Boolean)
+  );
+  const parityValues = seasonSnapshots
+    .map((snapshot) => snapshot.parityScore)
+    .filter((value) => Number.isFinite(value) && value > 0);
+  const currentPowerLeader = profiles[0] || null;
+
+  return {
+    seasonSnapshots,
+    dynastyRows,
+    managerLens,
+    storylines,
+    archiveTrades,
+    seasonRange: formatSeasonRange(seasonSnapshots),
+    completedSeasonCount: completedSnapshots.length,
+    uniqueChampionCount: championKeys.size,
+    averageParityScore: parityValues.length ? Math.round(average(parityValues)) : 0,
+    currentPowerLeader,
+    latestSnapshot: seasonSnapshots[0] || null,
+    finishMatrixRows: dynastyRows.slice(0, Math.min(12, dynastyRows.length)),
+    syncLabel: buildArchiveSyncLabel(),
+  };
+}
+
+function getArchiveTradeTransactions() {
+  const currentTransactions = state.transactions.map((transaction) => ({
+    ...transaction,
+    sourceLeagueId: state.leagueId,
+    sourceSeason: state.league?.season,
+  }));
+  return [...currentTransactions, ...state.historyTransactions]
+    .filter((transaction) => transaction?.type === "trade" && transaction?.status === "complete")
+    .sort((a, b) => Number(b.status_updated || b.created || 0) - Number(a.status_updated || a.created || 0));
+}
+
+function buildArchiveTradeAnalytics(transactions) {
+  const byLeagueId = new Map();
+  const pairMap = new Map();
+  const managerMap = new Map();
+  let movedAssetCount = 0;
+  let movedValue = 0;
+  let multiTeamTradeCount = 0;
+
+  transactions.forEach((transaction) => {
+    const sourceLeagueId = String(transaction?.sourceLeagueId || state.leagueId || "");
+    const sourceSeason = String(transaction?.sourceSeason || getHistoryEntryByLeagueId(sourceLeagueId)?.season || "");
+    if (!byLeagueId.has(sourceLeagueId)) {
+      byLeagueId.set(sourceLeagueId, {
+        leagueId: sourceLeagueId,
+        season: sourceSeason,
+        tradeCount: 0,
+        movedAssetCount: 0,
+        movedValue: 0,
+      });
+    }
+    const leagueBucket = byLeagueId.get(sourceLeagueId);
+    leagueBucket.tradeCount += 1;
+
+    const participantInfos = getTransactionParticipantIds(transaction)
+      .map((rosterId) => getHistoryRosterInfo(sourceLeagueId, rosterId))
+      .filter(Boolean);
+    if (participantInfos.length > 2) multiTeamTradeCount += 1;
+
+    participantInfos.forEach((info) => {
+      if (!managerMap.has(info.managerKey)) {
+        managerMap.set(info.managerKey, {
+          managerKey: info.managerKey,
+          managerName: info.managerName,
+          tradeCount: 0,
+          seasons: new Set(),
+        });
+      }
+      const manager = managerMap.get(info.managerKey);
+      manager.tradeCount += 1;
+      if (sourceSeason) manager.seasons.add(sourceSeason);
+    });
+
+    const movements = buildTradeMovements(transaction);
+    const transactionValue = movements.reduce((sum, movement) => sum + movement.value, 0);
+    movedAssetCount += movements.length;
+    movedValue += transactionValue;
+    leagueBucket.movedAssetCount += movements.length;
+    leagueBucket.movedValue += transactionValue;
+
+    for (let i = 0; i < participantInfos.length; i += 1) {
+      for (let j = i + 1; j < participantInfos.length; j += 1) {
+        const pairInfos = [participantInfos[i], participantInfos[j]]
+          .sort((a, b) => a.managerKey.localeCompare(b.managerKey));
+        const key = pairInfos.map((info) => info.managerKey).join("|");
+        if (!pairMap.has(key)) {
+          pairMap.set(key, {
+            managerKeys: pairInfos.map((info) => info.managerKey),
+            managerNames: pairInfos.map((info) => info.managerName),
+            count: 0,
+            valueMoved: 0,
+            seasons: new Set(),
+          });
+        }
+        const pair = pairMap.get(key);
+        pair.count += 1;
+        pair.valueMoved += transactionValue;
+        if (sourceSeason) pair.seasons.add(sourceSeason);
+      }
+    }
+  });
+
+  const pairLeaders = [...pairMap.values()]
+    .map((pair) => ({
+      ...pair,
+      seasons: [...pair.seasons].sort((a, b) => Number(b) - Number(a)),
+    }))
+    .sort((a, b) => b.count - a.count || b.valueMoved - a.valueMoved || a.managerNames.join("").localeCompare(b.managerNames.join("")));
+  const managerLeaderboard = [...managerMap.values()]
+    .map((manager) => ({
+      ...manager,
+      seasons: [...manager.seasons].sort((a, b) => Number(b) - Number(a)),
+    }))
+    .sort((a, b) => b.tradeCount - a.tradeCount || a.managerName.localeCompare(b.managerName));
+
+  return {
+    tradeCount: transactions.length,
+    movedAssetCount,
+    movedValue: Math.round(movedValue),
+    multiTeamTradeCount,
+    byLeagueId,
+    pairLeaders,
+    managerLeaderboard,
+    recentTrades: transactions.slice(0, ANALYTICS_RECENT_TRADE_LIMIT).map(buildArchiveRecentTradeSummary),
+  };
+}
+
+function buildSeasonSnapshot(entry, tradeBucket = null) {
+  if (!entry?.league || !Array.isArray(entry.rosters) || entry.rosters.length === 0) return null;
+  const standings = buildSeasonStandings(entry);
+  if (standings.length === 0) return null;
+
+  const regularLeader = standings.slice().sort(compareRegularSeasonRows)[0] || null;
+  const pointsLeader = standings.slice().sort((a, b) => b.points - a.points || compareRegularSeasonRows(a, b))[0] || null;
+  const potentialPointsLeader = standings.slice().sort((a, b) => b.potentialPoints - a.potentialPoints || compareRegularSeasonRows(a, b))[0] || null;
+  const champion = standings.find((row) => row.playoffFinish === 1)
+    || (!entry.isCurrent ? standings[0] : null);
+  const runnerUp = standings.find((row) => row.playoffFinish === 2) || null;
+  const cellar = standings[standings.length - 1] || null;
+  const points = standings.map((row) => row.points).filter((value) => Number.isFinite(value) && value > 0);
+  const maxPoints = points.length ? Math.max(...points) : 0;
+  const minPoints = points.length ? Math.min(...points) : 0;
+  const scoringSpread = Math.max(0, maxPoints - minPoints);
+  const parityScore = maxPoints > 0 ? clamp(Math.round(100 - (scoringSpread / maxPoints * 100)), 1, 99) : 0;
+  const consolationWinner = buildConsolationWinner(entry);
+  const status = String(entry.league?.status || "").replace(/_/g, " ");
+
+  return {
+    leagueId: String(entry.leagueId || ""),
+    season: String(entry.season || entry.league?.season || ""),
+    isCurrent: Boolean(entry.isCurrent),
+    isComplete: String(entry.league?.status || "").toLowerCase() === "complete",
+    statusLabel: status || (entry.isCurrent ? "current" : "archived"),
+    standings,
+    champion,
+    runnerUp,
+    regularLeader,
+    pointsLeader,
+    potentialPointsLeader,
+    consolationWinner,
+    cellar,
+    scoringAverage: points.length ? Math.round(average(points)) : 0,
+    scoringSpread: Math.round(scoringSpread),
+    parityScore,
+    tradeCount: tradeBucket?.tradeCount || 0,
+    movedAssetCount: tradeBucket?.movedAssetCount || 0,
+    movedValue: Math.round(tradeBucket?.movedValue || 0),
+    tradedPickCount: Array.isArray(entry.tradedPicks) ? entry.tradedPicks.length : 0,
+    playoffTeams: Number(entry.league?.settings?.playoff_teams || 0),
+    rosterCount: standings.length,
+  };
+}
+
+function buildSeasonStandings(entry) {
+  const userById = new Map((entry.users || []).map((user) => [String(user.user_id), user]));
+  const bracketFinishMap = buildBracketFinishMap(entry.winnersBracket);
+  const rows = (entry.rosters || []).map((roster) => {
+    const rosterId = normalizeRosterIdKey(roster?.roster_id);
+    const userId = roster?.owner_id != null ? String(roster.owner_id) : "";
+    const user = userId ? userById.get(userId) : null;
+    const managerName = displayNameForUser(user, `Roster ${rosterId || "?"}`);
+    const explicitRank = extractRosterFinishRank(roster);
+    return {
+      roster,
+      rosterId,
+      userId,
+      managerKey: buildManagerKey(userId, entry.leagueId, rosterId),
+      managerName,
+      wins: Number(roster?.settings?.wins || 0),
+      losses: Number(roster?.settings?.losses || 0),
+      ties: Number(roster?.settings?.ties || 0),
+      points: extractRosterDecimalStat(roster, "fpts", "fpts_decimal"),
+      potentialPoints: extractRosterDecimalStat(roster, "ppts", "ppts_decimal"),
+      pointsAgainst: extractRosterDecimalStat(roster, "fpts_against", "fpts_against_decimal"),
+      playoffFinish: bracketFinishMap.get(rosterId) || null,
+      explicitRank,
+      regularRank: null,
+      finishRank: null,
+    };
+  });
+
+  rows.slice().sort(compareRegularSeasonRows).forEach((row, index) => {
+    row.regularRank = index + 1;
+  });
+  rows.forEach((row) => {
+    row.finishRank = row.playoffFinish || row.explicitRank || row.regularRank || null;
+  });
+
+  return rows.sort(compareSeasonFinishRows);
+}
+
+function buildBracketFinishMap(winnersBracket = []) {
+  const finishMap = new Map();
+  winnersBracket.forEach((match) => {
+    const place = Number(match?.p);
+    if (!Number.isFinite(place) || place <= 0) return;
+    const winnerId = normalizeRosterIdKey(match?.w);
+    const loserId = normalizeRosterIdKey(match?.l);
+    if (winnerId) finishMap.set(winnerId, Math.min(finishMap.get(winnerId) || place, place));
+    if (loserId) finishMap.set(loserId, Math.min(finishMap.get(loserId) || place + 1, place + 1));
+  });
+  return finishMap;
+}
+
+function buildConsolationWinner(entry) {
+  const titleMatch = (entry.losersBracket || []).find((match) => Number(match?.p) === 1 && match?.w != null);
+  if (!titleMatch) return null;
+  return getHistoryRosterInfo(entry.leagueId, titleMatch.w);
+}
+
+function compareRegularSeasonRows(a, b) {
+  return b.wins - a.wins
+    || a.losses - b.losses
+    || b.ties - a.ties
+    || b.points - a.points
+    || b.potentialPoints - a.potentialPoints
+    || Number(a.rosterId) - Number(b.rosterId)
+    || String(a.rosterId).localeCompare(String(b.rosterId));
+}
+
+function compareSeasonFinishRows(a, b) {
+  return (a.finishRank || 999) - (b.finishRank || 999)
+    || compareRegularSeasonRows(a, b);
+}
+
+function buildDynastyRows(seasonSnapshots, profiles) {
+  const rowsByManager = new Map();
+  const ensureRow = (managerKey, managerName, userId = "") => {
+    if (!rowsByManager.has(managerKey)) {
+      rowsByManager.set(managerKey, {
+        managerKey,
+        managerName,
+        userId,
+        records: [],
+        titles: 0,
+        runnerUps: 0,
+        podiums: 0,
+        seasons: 0,
+        completedSeasons: 0,
+        totalWins: 0,
+        totalLosses: 0,
+        totalTies: 0,
+        totalPoints: 0,
+        bestFinish: null,
+        avgFinish: null,
+        volatility: 0,
+        currentScore: null,
+        currentPowerRank: null,
+        currentLaneLabel: "",
+        currentRosterId: null,
+        dynastyScore: 0,
+      });
+    }
+    return rowsByManager.get(managerKey);
+  };
+
+  seasonSnapshots.forEach((snapshot) => {
+    snapshot.standings.forEach((standing) => {
+      const row = ensureRow(standing.managerKey, standing.managerName, standing.userId);
+      const record = {
+        season: snapshot.season,
+        isCurrent: snapshot.isCurrent,
+        leagueId: snapshot.leagueId,
+        finishRank: standing.finishRank,
+        regularRank: standing.regularRank,
+        playoffFinish: standing.playoffFinish,
+        wins: standing.wins,
+        losses: standing.losses,
+        ties: standing.ties,
+        points: standing.points,
+        powerRank: null,
+        powerScore: null,
+      };
+      row.records.push(record);
+      row.seasons += 1;
+      row.totalWins += standing.wins;
+      row.totalLosses += standing.losses;
+      row.totalTies += standing.ties;
+      row.totalPoints += standing.points;
+      if (!snapshot.isCurrent) {
+        row.completedSeasons += 1;
+        if (standing.playoffFinish === 1) row.titles += 1;
+        if (standing.playoffFinish === 2) row.runnerUps += 1;
+        if (Number(standing.finishRank) <= 3) row.podiums += 1;
+      }
+    });
+  });
+
+  profiles.forEach((profile) => {
+    const roster = state.normalizedRosters.find((entry) => String(entry.rosterId) === String(profile.rosterId));
+    if (!roster) return;
+    const managerKey = buildManagerKey(roster.manager.userId, state.leagueId, roster.rosterId);
+    const row = ensureRow(managerKey, profile.managerName, roster.manager.userId);
+    row.currentScore = profile.score;
+    row.currentPowerRank = profile.rank;
+    row.currentLaneLabel = profile.laneLabel;
+    row.currentRosterId = profile.rosterId;
+    const currentRecord = row.records.find((record) => record.isCurrent);
+    if (currentRecord) {
+      currentRecord.powerRank = profile.rank;
+      currentRecord.powerScore = profile.score;
+    }
+  });
+
+  rowsByManager.forEach((row) => {
+    const finishRecords = row.records.filter((record) => Number.isFinite(record.finishRank) && !record.isCurrent);
+    const fallbackRecords = finishRecords.length ? finishRecords : row.records.filter((record) => Number.isFinite(record.finishRank));
+    const finishRanks = fallbackRecords.map((record) => record.finishRank);
+    row.bestFinish = finishRanks.length ? Math.min(...finishRanks) : null;
+    row.avgFinish = finishRanks.length ? average(finishRanks) : null;
+    row.volatility = calculateRankVolatility(finishRanks);
+    row.dynastyScore = Math.round(
+      row.titles * 120
+        + row.runnerUps * 54
+        + row.podiums * 28
+        + row.totalWins * 5
+        + row.totalPoints / 75
+        + (row.currentScore || 0) * 0.55
+        - row.volatility * 2
+    );
+  });
+
+  return [...rowsByManager.values()].sort((a, b) =>
+    b.titles - a.titles
+      || b.runnerUps - a.runnerUps
+      || b.podiums - a.podiums
+      || b.dynastyScore - a.dynastyScore
+      || (a.avgFinish || 99) - (b.avgFinish || 99)
+      || a.managerName.localeCompare(b.managerName)
+  );
+}
+
+function buildManagerHistoryLens(meRoster, meProfile, seasonSnapshots, dynastyRows, market) {
+  const managerKey = buildManagerKey(meRoster.manager.userId, state.leagueId, meRoster.rosterId);
+  const row = dynastyRows.find((entry) => entry.managerKey === managerKey)
+    || dynastyRows.find((entry) => entry.currentRosterId === meRoster.rosterId)
+    || null;
+  const records = (row?.records || []).slice().sort((a, b) => Number(b.season) - Number(a.season));
+  const previousRecord = records.find((record) => !record.isCurrent) || null;
+  const bestFinishLabel = row?.bestFinish ? ordinal(Math.round(row.bestFinish)) : "N/A";
+  const avgFinishLabel = row?.avgFinish ? `${row.avgFinish.toFixed(1)} avg` : "No archive";
+  const currentPowerLabel = `${ordinal(meProfile.rank)} power rank`;
+  const tradeLabel = market.favoritePartner
+    ? `${market.favoritePartner.otherManagerName} is the warmest trade lane`
+    : market.myTradeCount > 0
+      ? `${market.myTradeCount} current-season trade${market.myTradeCount === 1 ? "" : "s"}`
+      : "No current-season trades";
+  const nextChapter = buildManagerNextChapter(meProfile, row, market);
+
+  return {
+    managerKey,
+    managerName: meProfile.managerName,
+    headline: row?.titles
+      ? `${row.titles} title${row.titles === 1 ? "" : "s"} in the archive`
+      : previousRecord
+        ? `Best archived finish: ${bestFinishLabel}`
+        : "No completed archive season yet",
+    shortStatus: `${meProfile.score}/100 | ${currentPowerLabel}`,
+    bestFinishLabel,
+    avgFinishLabel,
+    titles: row?.titles || 0,
+    podiums: row?.podiums || 0,
+    completedSeasons: row?.completedSeasons || 0,
+    recordLabel: row ? formatManagerRecord(row) : "0-0",
+    currentPowerLabel,
+    currentLaneLabel: meProfile.laneLabel,
+    currentScore: meProfile.score,
+    tradeLabel,
+    nextChapter,
+    records: records.slice(0, 5),
+  };
+}
+
+function buildManagerNextChapter(profile, row, market) {
+  if (profile.rank <= 3 && row?.titles === 0) {
+    return "This is a real title window. The league archive says the next move should protect weekly ceiling, not just add abstract value.";
+  }
+  if (profile.assetSummary.firstRoundPickCount >= 4) {
+    return "The selected roster controls enough future capital to shape the next league era if one pick becomes a weekly starter.";
+  }
+  if (profile.weakestPosition) {
+    return `${profile.weakestPosition.position} is the cleanest pressure point if this manager wants to climb the current power board.`;
+  }
+  if (market.favoritePartner) {
+    return `The archive points back to ${market.favoritePartner.otherManagerName}; that is the first negotiation lane to reopen.`;
+  }
+  return "The selected manager is a neutral archive profile right now: useful roster, no obvious league-history lever yet.";
+}
+
+function buildLeagueStorylines(seasonSnapshots, dynastyRows, archiveTrades, leagueAnalytics) {
+  const completedSnapshots = seasonSnapshots.filter((snapshot) => !snapshot.isCurrent);
+  const titleLeader = dynastyRows.slice().sort((a, b) => b.titles - a.titles || b.runnerUps - a.runnerUps || b.dynastyScore - a.dynastyScore)[0] || null;
+  const heartbreakLeader = dynastyRows.slice().sort((a, b) => b.runnerUps - a.runnerUps || b.podiums - a.podiums)[0] || null;
+  const uniqueChampions = new Set(completedSnapshots.map((snapshot) => snapshot.champion?.managerKey).filter(Boolean)).size;
+  const parityRate = completedSnapshots.length ? Math.round(uniqueChampions / completedSnapshots.length * 100) : 0;
+  const oldestCompleted = completedSnapshots[completedSnapshots.length - 1] || null;
+  const newestCompleted = completedSnapshots[0] || null;
+  const scoringDelta = oldestCompleted && newestCompleted
+    ? newestCompleted.scoringAverage - oldestCompleted.scoringAverage
+    : 0;
+  const tradeLeader = archiveTrades.managerLeaderboard[0] || null;
+
+  return [
+    {
+      title: titleLeader?.titles ? "Dynasty Gravity" : "Open Throne",
+      body: titleLeader?.titles
+        ? `${titleLeader.managerName} owns the strongest trophy profile with ${titleLeader.titles} title${titleLeader.titles === 1 ? "" : "s"} and ${titleLeader.podiums} podium finish${titleLeader.podiums === 1 ? "" : "es"}.`
+        : "No repeat title pattern is visible in the loaded archive, so the league still reads like an open throne.",
+      tone: "blue",
+    },
+    {
+      title: "Parity Meter",
+      body: completedSnapshots.length
+        ? `${uniqueChampions} different champion${uniqueChampions === 1 ? "" : "s"} across ${completedSnapshots.length} completed season${completedSnapshots.length === 1 ? "" : "s"} (${parityRate}% title churn).`
+        : `${leagueAnalytics.parityLabel} in the current power model, with completed history still limited.`,
+      tone: parityRate >= 70 ? "green" : parityRate >= 40 ? "gold" : "rose",
+    },
+    {
+      title: scoringDelta >= 0 ? "Scoring Boom" : "Scoring Squeeze",
+      body: oldestCompleted && newestCompleted
+        ? `Average points moved ${formatSignedNumber(scoringDelta)} from ${oldestCompleted.season} to ${newestCompleted.season}.`
+        : `The current scoring spread is ${formatNumber(seasonSnapshots[0]?.scoringSpread || 0)} points across the league.`,
+      tone: scoringDelta >= 0 ? "green" : "gold",
+    },
+    {
+      title: tradeLeader ? "Market Maker" : "Quiet Market",
+      body: tradeLeader
+        ? `${tradeLeader.managerName} appears in ${tradeLeader.tradeCount} archived trade${tradeLeader.tradeCount === 1 ? "" : "s"} across ${tradeLeader.seasons.length || 1} season${tradeLeader.seasons.length === 1 ? "" : "s"}.`
+        : "The trade archive has not found a dominant dealmaker yet.",
+      tone: tradeLeader ? "blue" : "gold",
+    },
+    {
+      title: heartbreakLeader?.runnerUps ? "Final Boss Scar" : "No Finals Scar Yet",
+      body: heartbreakLeader?.runnerUps
+        ? `${heartbreakLeader.managerName} has ${heartbreakLeader.runnerUps} runner-up finish${heartbreakLeader.runnerUps === 1 ? "" : "es"}, the archive's clearest near-miss profile.`
+        : "No manager has a clear runner-up pattern in the loaded seasons.",
+      tone: heartbreakLeader?.runnerUps ? "rose" : "green",
+    },
+  ];
+}
+
 function renderAnalyticsDashboard(model) {
-  const { meProfile, market, rosterAnalytics, leagueAnalytics, quests } = model;
-  const syncLabel = state.transactionsLoaded
-    ? state.transactionsFailed
-      ? "Trade market unavailable"
-      : `${state.transactionWeeksLoaded} transaction weeks scanned`
-    : "Trade market syncing";
-  const favoritePartnerLabel = market.favoritePartner
-    ? market.favoritePartner.otherManagerName
-    : market.myTradeCount > 0 ? "No repeat partner" : "No trades yet";
-  const leaguePairLabel = market.topPair
-    ? market.topPair.managerNames.join(" / ")
-    : "No trade pairs yet";
+  const { history, market } = model;
+  const latestSnapshot = history.latestSnapshot;
+  const championLabel = latestSnapshot?.isCurrent
+    ? latestSnapshot.regularLeader?.managerName || "TBD"
+    : latestSnapshot?.champion?.managerName || "TBD";
+  const championDetail = latestSnapshot?.isCurrent ? "current standings leader" : `latest champion (${latestSnapshot?.season || "archive"})`;
+  const powerLeaderLabel = history.currentPowerLeader
+    ? history.currentPowerLeader.managerName
+    : "TBD";
+  const tradeLabel = history.archiveTrades.tradeCount > 0
+    ? `${formatNumber(history.archiveTrades.movedAssetCount)} assets moved`
+    : history.syncLabel;
 
   return `
-    <div class="analytics-hero">
+    <div class="league-archive-hero">
       <div class="analytics-hero-main">
-        <span class="analytics-kicker">${escapeHtml(state.leagueName || "League")} Command Center</span>
-        <h3>${escapeHtml(meProfile.managerName)} GM profile</h3>
-        <p>${escapeHtml(rosterAnalytics.identityLine)}</p>
+        <span class="analytics-kicker">${escapeHtml(state.leagueName || "League")} Dynasty Ledger</span>
+        <h3>League history room</h3>
+        <p>${escapeHtml(history.seasonRange)} archive loaded. The selected manager is a lens; the board is built around the league's champions, scoring eras, trade roads, and current power structure.</p>
         <div class="power-badge-row">
-          ${rosterAnalytics.badges.map((badge) => `<span class="power-badge">${escapeHtml(badge)}</span>`).join("")}
-          <span class="power-badge muted-badge">${escapeHtml(syncLabel)}</span>
+          <span class="power-badge">${escapeHtml(`${history.seasonSnapshots.length} season${history.seasonSnapshots.length === 1 ? "" : "s"}`)}</span>
+          <span class="power-badge">${escapeHtml(`${history.uniqueChampionCount} title winner${history.uniqueChampionCount === 1 ? "" : "s"}`)}</span>
+          <span class="power-badge muted-badge">${escapeHtml(history.syncLabel)}</span>
         </div>
       </div>
-      <div class="gm-level-panel">
-        <span>GM Level</span>
-        <strong>${rosterAnalytics.gmLevel}</strong>
-        <small>${escapeHtml(rosterAnalytics.gmTitle)}</small>
+      <div class="trophy-panel">
+        <span>Latest Crown</span>
+        <strong>${escapeHtml(championLabel)}</strong>
+        <small>${escapeHtml(championDetail)}</small>
       </div>
     </div>
 
     <div class="analytics-metric-grid">
-      ${renderAnalyticsMetric("Team Power", `${meProfile.score}/100`, `${formatStarterRank(meProfile.rank, meProfile.totalTeams)} lineup`, "blue")}
-      ${renderAnalyticsMetric("My Trades", formatNumber(market.myTradeCount), `${market.myTradeRankLabel} in market activity`, "green")}
-      ${renderAnalyticsMetric("League Trades", formatNumber(market.tradeCount), `${formatNumber(market.movedAssetCount)} assets moved`, "gold")}
-      ${renderAnalyticsMetric("Favorite Partner", favoritePartnerLabel, market.favoritePartner ? `${market.favoritePartner.count} trade${market.favoritePartner.count === 1 ? "" : "s"}` : "Trade graph empty", "blue")}
-      ${renderAnalyticsMetric("League Rivalry", leaguePairLabel, market.topPair ? `${market.topPair.count} completed trade${market.topPair.count === 1 ? "" : "s"}` : "No completed trades", "rose")}
-      ${renderAnalyticsMetric("Chaos Index", `${market.chaosScore}/99`, leagueAnalytics.marketTempoLabel, "gold")}
+      ${renderAnalyticsMetric("Archive Span", history.seasonRange, `${history.completedSeasonCount} completed season${history.completedSeasonCount === 1 ? "" : "s"}`, "blue")}
+      ${renderAnalyticsMetric("Latest Crown", championLabel, championDetail, "gold")}
+      ${renderAnalyticsMetric("Power Leader", powerLeaderLabel, history.currentPowerLeader ? `${history.currentPowerLeader.score}/100 current score` : "values syncing", "green")}
+      ${renderAnalyticsMetric("Trades Logged", formatNumber(history.archiveTrades.tradeCount), tradeLabel, "blue")}
+      ${renderAnalyticsMetric("Parity", history.averageParityScore ? `${history.averageParityScore}/100` : "N/A", "average scoring tightness", "green")}
+      ${renderAnalyticsMetric("Viewing", history.managerLens.managerName, history.managerLens.shortStatus, "gold")}
     </div>
 
+    ${renderSeasonArchivePanel(history)}
+
     <div class="analytics-two-col">
-      ${renderTeamDnaPanel(rosterAnalytics, meProfile)}
-      ${renderTradeMarketPanel(market)}
+      ${renderDynastyStandingsPanel(history)}
+      ${renderManagerLensPanel(history.managerLens)}
     </div>
 
+    ${renderFinishMatrixPanel(history)}
+
     <div class="analytics-two-col">
-      ${renderLeagueEconomyPanel(leagueAnalytics, market)}
-      ${renderQuestPanel(quests)}
+      ${renderRivalryLedgerPanel(history)}
+      ${renderLeagueStoryPanel(history)}
     </div>
 
-    ${renderPowerRankingsPanel(model.profiles)}
+    ${renderCurrentPowerBoardPanel(model.profiles)}
 
     <div class="analytics-two-col">
-      ${renderRecentTradesPanel(market)}
+      ${renderArchiveRecentTradesPanel(history)}
       ${renderAssetMarketPanel(market)}
     </div>
   `;
+}
+
+function renderSeasonArchivePanel(history) {
+  return `
+    <section class="analytics-panel analytics-panel-wide">
+      <div class="analytics-panel-heading">
+        <h3>Season Archive</h3>
+        <span>${escapeHtml(history.seasonRange)}</span>
+      </div>
+      <div class="season-ledger">
+        ${history.seasonSnapshots.map((snapshot) => renderSeasonLedgerCard(snapshot)).join("")}
+      </div>
+    </section>
+  `;
+}
+
+function renderSeasonLedgerCard(snapshot) {
+  const crown = snapshot.isCurrent
+    ? snapshot.regularLeader
+    : snapshot.champion || snapshot.regularLeader;
+  const crownLabel = snapshot.isCurrent ? "Standings Leader" : "Champion";
+  const pointsLeader = snapshot.pointsLeader?.managerName || "TBD";
+  const recordLeader = snapshot.regularLeader
+    ? `${snapshot.regularLeader.wins}-${snapshot.regularLeader.losses}${snapshot.regularLeader.ties ? `-${snapshot.regularLeader.ties}` : ""}`
+    : "0-0";
+  return `
+    <section class="season-card ${snapshot.isCurrent ? "current" : ""}">
+      <div class="season-card-title">
+        <strong>${escapeHtml(snapshot.season)}</strong>
+        <span>${escapeHtml(snapshot.statusLabel)}</span>
+      </div>
+      ${renderSeasonStat(crownLabel, crown?.managerName || "TBD", snapshot.runnerUp ? `beat ${snapshot.runnerUp.managerName}` : `${recordLeader} top record`)}
+      ${renderSeasonStat("Points King", pointsLeader, `${formatNumber(snapshot.pointsLeader?.points || 0)} PF`)}
+      ${renderSeasonStat("Scoring Gap", formatNumber(snapshot.scoringSpread), `${snapshot.parityScore || "N/A"} parity score`)}
+      ${renderSeasonStat("Trade Ledger", formatNumber(snapshot.tradeCount), `${formatNumber(snapshot.movedAssetCount)} assets moved`)}
+      ${renderSeasonStat("Pick Drift", formatNumber(snapshot.tradedPickCount), "traded pick records")}
+    </section>
+  `;
+}
+
+function renderSeasonStat(label, value, detail) {
+  return `
+    <div class="season-stat">
+      <span>${escapeHtml(label)}</span>
+      <strong>${escapeHtml(String(value))}</strong>
+      <small>${escapeHtml(detail || "")}</small>
+    </div>
+  `;
+}
+
+function renderDynastyStandingsPanel(history) {
+  return `
+    <section class="analytics-panel">
+      <div class="analytics-panel-heading">
+        <h3>Dynasty Standings</h3>
+        <span>archive score</span>
+      </div>
+      <div class="dynasty-table">
+        ${history.dynastyRows.slice(0, 8).map((row, index) => renderDynastyRow(row, index)).join("")}
+      </div>
+    </section>
+  `;
+}
+
+function renderDynastyRow(row, index) {
+  return `
+    <div class="dynasty-row ${row.currentRosterId === state.meRosterId ? "selected" : ""}">
+      <span class="rank-number">${index + 1}</span>
+      <div>
+        <strong>${escapeHtml(row.managerName)}</strong>
+        <span>${formatManagerRecord(row)} | ${row.completedSeasons} archived season${row.completedSeasons === 1 ? "" : "s"}</span>
+      </div>
+      <span>${row.titles} titles</span>
+      <span>${row.podiums} podiums</span>
+      <strong>${formatNumber(row.dynastyScore)}</strong>
+    </div>
+  `;
+}
+
+function renderManagerLensPanel(managerLens) {
+  return `
+    <section class="analytics-panel manager-lens-panel">
+      <div class="analytics-panel-heading">
+        <h3>Selected Manager Lens</h3>
+        <span>${escapeHtml(managerLens.currentLaneLabel)}</span>
+      </div>
+      <div class="manager-lens-hero">
+        <div>
+          <span class="analytics-kicker">${escapeHtml(managerLens.managerName)}</span>
+          <strong>${escapeHtml(managerLens.headline)}</strong>
+          <p>${escapeHtml(managerLens.nextChapter)}</p>
+        </div>
+        <div class="manager-score">
+          <span>Now</span>
+          <strong>${managerLens.currentScore}</strong>
+          <small>${escapeHtml(managerLens.currentPowerLabel)}</small>
+        </div>
+      </div>
+      <div class="manager-lens-grid">
+        ${renderManagerLensStat("Best Finish", managerLens.bestFinishLabel)}
+        ${renderManagerLensStat("Average", managerLens.avgFinishLabel)}
+        ${renderManagerLensStat("Record", managerLens.recordLabel)}
+        ${renderManagerLensStat("Trades", managerLens.tradeLabel)}
+      </div>
+      <div class="mini-season-list">
+        ${managerLens.records.length
+          ? managerLens.records.map(renderManagerSeasonChip).join("")
+          : `<p class="muted small analytics-empty">No archive rows found for this manager.</p>`}
+      </div>
+    </section>
+  `;
+}
+
+function renderManagerLensStat(label, value) {
+  return `
+    <section class="manager-lens-stat">
+      <span>${escapeHtml(label)}</span>
+      <strong>${escapeHtml(String(value))}</strong>
+    </section>
+  `;
+}
+
+function renderManagerSeasonChip(record) {
+  const rankLabel = record.isCurrent && record.powerRank
+    ? `${ordinal(record.powerRank)} power`
+    : record.finishRank
+      ? `${ordinal(record.finishRank)} finish`
+      : "unranked";
+  return `
+    <div class="mini-season-chip ${record.isCurrent ? "current" : ""}">
+      <strong>${escapeHtml(record.season)}</strong>
+      <span>${escapeHtml(rankLabel)}</span>
+    </div>
+  `;
+}
+
+function renderFinishMatrixPanel(history) {
+  if (history.seasonSnapshots.length === 0) return "";
+  const seasons = history.seasonSnapshots.map((snapshot) => snapshot.season);
+  return `
+    <section class="analytics-panel analytics-panel-wide">
+      <div class="analytics-panel-heading">
+        <h3>Finish Matrix</h3>
+        <span>rank by season</span>
+      </div>
+      <div class="finish-matrix-shell">
+        <div class="finish-matrix" style="--season-count:${seasons.length}">
+          <div class="finish-matrix-head">Manager</div>
+          ${seasons.map((season) => `<div class="finish-matrix-head">${escapeHtml(season)}</div>`).join("")}
+          ${history.finishMatrixRows.map((row) => renderFinishMatrixRow(row, seasons)).join("")}
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+function renderFinishMatrixRow(row, seasons) {
+  const recordsBySeason = new Map(row.records.map((record) => [String(record.season), record]));
+  return `
+    <div class="finish-matrix-name ${row.currentRosterId === state.meRosterId ? "selected" : ""}">
+      <strong>${escapeHtml(row.managerName)}</strong>
+      <span>${row.titles}T / ${row.podiums}P</span>
+    </div>
+    ${seasons.map((season) => renderFinishMatrixCell(recordsBySeason.get(String(season)))).join("")}
+  `;
+}
+
+function renderFinishMatrixCell(record) {
+  if (!record) return `<div class="finish-cell empty">-</div>`;
+  const rank = record.isCurrent && record.powerRank ? record.powerRank : record.finishRank;
+  const label = record.isCurrent && record.powerRank
+    ? `P${record.powerRank}`
+    : rank ? String(rank) : "-";
+  const className = record.isCurrent
+    ? "current"
+    : rank === 1
+      ? "title"
+      : rank && rank <= 3
+        ? "podium"
+        : rank && rank >= 9
+          ? "bottom"
+          : "middle";
+  return `<div class="finish-cell ${className}" title="${escapeHtml(record.season)}">${escapeHtml(label)}</div>`;
+}
+
+function renderRivalryLedgerPanel(history) {
+  return `
+    <section class="analytics-panel">
+      <div class="analytics-panel-heading">
+        <h3>Rivalry Ledger</h3>
+        <span>${formatNumber(history.archiveTrades.tradeCount)} trades</span>
+      </div>
+      <div class="analytics-list">
+        ${history.archiveTrades.pairLeaders.length
+          ? history.archiveTrades.pairLeaders.slice(0, 6).map(renderArchivePairRow).join("")
+          : `<p class="muted small analytics-empty">No recurring trade roads in the loaded archive yet.</p>`}
+      </div>
+    </section>
+  `;
+}
+
+function renderArchivePairRow(pair) {
+  const seasonLabel = pair.seasons.length ? pair.seasons.join(", ") : "archive";
+  return `
+    <div class="analytics-row archive-pair-row">
+      <div>
+        <strong>${escapeHtml(pair.managerNames.join(" / "))}</strong>
+        <span>${escapeHtml(seasonLabel)} | ${formatNumber(pair.valueMoved)} value moved</span>
+      </div>
+      <div class="row-meter" aria-hidden="true"><span style="width:${clamp(pair.count * 16, 10, 100)}%"></span></div>
+      <em>${pair.count}</em>
+    </div>
+  `;
+}
+
+function renderLeagueStoryPanel(history) {
+  return `
+    <section class="analytics-panel">
+      <div class="analytics-panel-heading">
+        <h3>League Eras</h3>
+        <span>${history.storylines.length} reads</span>
+      </div>
+      <div class="storyline-list">
+        ${history.storylines.map((story) => `
+          <section class="storyline-card ${story.tone || ""}">
+            <strong>${escapeHtml(story.title)}</strong>
+            <span>${escapeHtml(story.body)}</span>
+          </section>
+        `).join("")}
+      </div>
+    </section>
+  `;
+}
+
+function renderCurrentPowerBoardPanel(profiles) {
+  return `
+    <section class="analytics-panel analytics-panel-wide">
+      <div class="analytics-panel-heading">
+        <h3>Current Power Board</h3>
+        <span>value model snapshot</span>
+      </div>
+      <div class="power-rank-table">
+        ${profiles.slice(0, ANALYTICS_POWER_RANK_LIMIT).map((profile, index) => renderPowerRankRow(profile, index)).join("")}
+      </div>
+    </section>
+  `;
+}
+
+function renderArchiveRecentTradesPanel(history) {
+  return `
+    <section class="analytics-panel">
+      <div class="analytics-panel-heading">
+        <h3>Archive Trade Wire</h3>
+        <span>${history.archiveTrades.recentTrades.length} recent</span>
+      </div>
+      <div class="recent-trade-list">
+        ${history.archiveTrades.recentTrades.length > 0
+          ? history.archiveTrades.recentTrades.map((trade) => renderRecentTrade(trade)).join("")
+          : `<p class="muted small analytics-empty">Archived trades are still syncing or unavailable.</p>`}
+      </div>
+    </section>
+  `;
+}
+
+function buildArchiveRecentTradeSummary(transaction) {
+  const sourceLeagueId = String(transaction?.sourceLeagueId || state.leagueId || "");
+  const participantIds = getTransactionParticipantIds(transaction);
+  const participantNames = participantIds.map((rosterId) => getHistoryRosterInfo(sourceLeagueId, rosterId)?.managerName || getRosterManagerName(rosterId));
+  const movements = buildTradeMovements(transaction);
+  const byRecipient = new Map();
+  movements.forEach((movement) => {
+    if (!byRecipient.has(movement.toRosterId)) byRecipient.set(movement.toRosterId, []);
+    byRecipient.get(movement.toRosterId).push(movement);
+  });
+  const preview = participantIds
+    .map((rosterId) => {
+      const assets = byRecipient.get(rosterId) || [];
+      const names = assets.slice(0, 3).map((asset) => asset.name);
+      const suffix = assets.length > 3 ? ` +${assets.length - 3}` : "";
+      const managerName = getHistoryRosterInfo(sourceLeagueId, rosterId)?.managerName || getRosterManagerName(rosterId);
+      return `${managerName} got ${names.length ? names.join(", ") + suffix : "value"}`;
+    })
+    .join(" | ");
+  const season = transaction?.sourceSeason ? `${transaction.sourceSeason} ` : "";
+  const date = formatTransactionDate(transaction.status_updated || transaction.created);
+  return {
+    title: participantNames.join(" / "),
+    subtitle: `${season}${date} | ${movements.length} asset${movements.length === 1 ? "" : "s"} moved`,
+    preview: preview || "Trade details unavailable from Sleeper payload.",
+  };
+}
+
+function buildArchiveSyncLabel() {
+  const currentLabel = state.transactionsLoaded
+    ? state.transactionsFailed
+      ? "current trades unavailable"
+      : `${state.transactionWeeksLoaded} current weeks`
+    : "current trades syncing";
+  const archiveSeasonCount = Math.max(0, state.leagueHistory.length - 1);
+  if (archiveSeasonCount === 0) return currentLabel;
+  const historyLabel = state.historyTransactionsLoaded
+    ? state.historyTransactionsFailed
+      ? "archive trades unavailable"
+      : `${state.historyTransactionLeaguesLoaded}/${Math.min(archiveSeasonCount, HISTORY_TRANSACTION_SEASON_LIMIT)} archive seasons`
+    : "archive trades syncing";
+  return `${currentLabel}; ${historyLabel}`;
+}
+
+function formatSeasonRange(snapshots) {
+  const seasons = snapshots
+    .map((snapshot) => Number(snapshot.season))
+    .filter(Number.isFinite)
+    .sort((a, b) => a - b);
+  if (seasons.length === 0) return "Current season";
+  if (seasons.length === 1) return String(seasons[0]);
+  return `${seasons[0]}-${seasons[seasons.length - 1]}`;
+}
+
+function getHistoryEntryByLeagueId(leagueId) {
+  const key = String(leagueId || "");
+  return state.leagueHistory.find((entry) => String(entry.leagueId) === key) || null;
+}
+
+function getHistoryRosterInfo(leagueId, rosterId) {
+  const rosterKey = normalizeRosterIdKey(rosterId);
+  if (!rosterKey) return null;
+  const entry = getHistoryEntryByLeagueId(leagueId) || (String(leagueId || "") === String(state.leagueId) ? state.leagueHistory.find((item) => item.isCurrent) : null);
+  const source = entry || {
+    leagueId: state.leagueId,
+    users: state.users,
+    rosters: state.rosters,
+  };
+  const roster = (source.rosters || []).find((item) => normalizeRosterIdKey(item?.roster_id) === rosterKey);
+  if (!roster) {
+    const currentRoster = state.normalizedRosters.find((item) => normalizeRosterIdKey(item.rosterId) === rosterKey);
+    if (currentRoster) {
+      return {
+        rosterId: rosterKey,
+        userId: currentRoster.manager.userId,
+        managerKey: buildManagerKey(currentRoster.manager.userId, state.leagueId, rosterKey),
+        managerName: currentRoster.manager.displayName,
+      };
+    }
+    return {
+      rosterId: rosterKey,
+      userId: "",
+      managerKey: buildManagerKey("", leagueId, rosterKey),
+      managerName: `Roster ${rosterKey}`,
+    };
+  }
+  const userId = roster.owner_id != null ? String(roster.owner_id) : "";
+  const userById = new Map((source.users || []).map((user) => [String(user.user_id), user]));
+  const user = userId ? userById.get(userId) : null;
+  return {
+    rosterId: rosterKey,
+    userId,
+    managerKey: buildManagerKey(userId, source.leagueId || leagueId, rosterKey),
+    managerName: displayNameForUser(user, `Roster ${rosterKey}`),
+  };
+}
+
+function buildManagerKey(userId, leagueId, rosterId) {
+  const normalizedUserId = String(userId || "").trim();
+  if (normalizedUserId && normalizedUserId !== "unknown") return `user:${normalizedUserId}`;
+  return `roster:${leagueId || "league"}:${rosterId || "unknown"}`;
+}
+
+function extractRosterDecimalStat(roster, wholeKey, decimalKey) {
+  const settings = roster?.settings || {};
+  const whole = Number(settings[wholeKey] || 0);
+  const decimal = Number(settings[decimalKey] || 0);
+  if (!Number.isFinite(whole) && !Number.isFinite(decimal)) return 0;
+  return (Number.isFinite(whole) ? whole : 0) + (Number.isFinite(decimal) ? decimal : 0) / 100;
+}
+
+function calculateRankVolatility(ranks) {
+  const numericRanks = ranks.filter(Number.isFinite);
+  if (numericRanks.length <= 1) return 0;
+  const avg = average(numericRanks);
+  const variance = average(numericRanks.map((rank) => (rank - avg) ** 2));
+  return Math.sqrt(variance);
+}
+
+function average(values) {
+  const numericValues = values.filter(Number.isFinite);
+  if (numericValues.length === 0) return 0;
+  return numericValues.reduce((sum, value) => sum + value, 0) / numericValues.length;
+}
+
+function formatManagerRecord(row) {
+  if (!row) return "0-0";
+  const ties = row.totalTies ? `-${row.totalTies}` : "";
+  return `${row.totalWins}-${row.totalLosses}${ties}`;
 }
 
 function renderAnalyticsMetric(label, value, detail, tone = "") {
