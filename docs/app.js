@@ -73,6 +73,11 @@ const CUSTOM_MULTI_TEAM_PLAN_LIMIT = 18;
 const AUTOSELECT_MANAGER_BY_LEAGUE = {
   "1315165104303513600": "NikoSkiouris",
 };
+const TRANSACTION_WEEK_START = 1;
+const TRANSACTION_WEEK_FALLBACK_END = 18;
+const ANALYTICS_RECENT_TRADE_LIMIT = 6;
+const ANALYTICS_POWER_RANK_LIMIT = 12;
+const ANALYTICS_ASSET_LEADER_LIMIT = 8;
 
 const state = {
   leagueId: "",
@@ -112,6 +117,12 @@ const state = {
   trendingLoaded: false,
   playerMetadataLoaded: false,
   playerMetadataFailed: false,
+  activePage: "analytics",
+  transactions: [],
+  transactionsLoaded: false,
+  transactionsFailed: false,
+  transactionWeeksLoaded: 0,
+  transactionLoadError: "",
 };
 
 const el = {
@@ -124,8 +135,15 @@ const el = {
   leagueStatusLoader: document.querySelector("#league-status-loader"),
   identitySection: document.querySelector("#identity-section"),
   meSelect: document.querySelector("#me-select"),
+  pageTabs: document.querySelector("#page-tabs"),
+  analyticsTab: document.querySelector("#analytics-tab"),
+  traderTab: document.querySelector("#trader-tab"),
+  analyticsPage: document.querySelector("#analytics-page"),
+  traderPage: document.querySelector("#trader-page"),
   powerSection: document.querySelector("#power-section"),
   powerDashboard: document.querySelector("#power-dashboard"),
+  analyticsSection: document.querySelector("#analytics-section"),
+  analyticsDashboard: document.querySelector("#analytics-dashboard"),
   playerSection: document.querySelector("#player-section"),
   tradeModeSelect: document.querySelector("#trade-mode-select"),
   tradeModeHelp: document.querySelector("#trade-mode-help"),
@@ -152,6 +170,8 @@ el.leagueId?.addEventListener("keydown", (event) => {
   }
 });
 el.copyLeagueIdBtn?.addEventListener("click", copyHelperLeagueId);
+el.analyticsTab?.addEventListener("click", () => setActivePage("analytics"));
+el.traderTab?.addEventListener("click", () => setActivePage("trader"));
 el.playerSearch.addEventListener("input", () => {
   invalidateResults();
   renderPlayerSearch();
@@ -169,6 +189,7 @@ el.meSelect.addEventListener("change", () => {
   pruneExcludedOutgoingAssets();
   syncTradeModeUi();
   renderPowerDashboard();
+  renderLeagueAnalyticsDashboard();
 });
 el.generateBtn.addEventListener("click", generateTradeIdeas);
 
@@ -182,6 +203,36 @@ let copyFeedbackTimer = null;
 function invalidateResults() {
   el.resultsSection.classList.add("hidden");
   syncGenerateState();
+}
+
+function showAppPages() {
+  el.pageTabs?.classList.remove("hidden");
+  setActivePage(state.activePage || "analytics");
+}
+
+function hideAppPages() {
+  el.pageTabs?.classList.add("hidden");
+  el.analyticsPage?.classList.add("hidden");
+  el.traderPage?.classList.add("hidden");
+}
+
+function setActivePage(page) {
+  const nextPage = page === "trader" ? "trader" : "analytics";
+  state.activePage = nextPage;
+
+  el.analyticsPage?.classList.toggle("hidden", nextPage !== "analytics");
+  el.traderPage?.classList.toggle("hidden", nextPage !== "trader");
+  el.analyticsTab?.classList.toggle("active", nextPage === "analytics");
+  el.traderTab?.classList.toggle("active", nextPage === "trader");
+  el.analyticsTab?.setAttribute("aria-selected", String(nextPage === "analytics"));
+  el.traderTab?.setAttribute("aria-selected", String(nextPage === "trader"));
+
+  if (nextPage === "analytics") {
+    renderPowerDashboard();
+    renderLeagueAnalyticsDashboard();
+    return;
+  }
+  syncTradeModeUi();
 }
 
 function getTradeMode() {
@@ -338,10 +389,19 @@ async function loadLeague() {
   state.trendingLoaded = false;
   state.playerMetadataLoaded = false;
   state.playerMetadataFailed = false;
+  state.activePage = "analytics";
+  state.transactions = [];
+  state.transactionsLoaded = false;
+  state.transactionsFailed = false;
+  state.transactionWeeksLoaded = 0;
+  state.transactionLoadError = "";
   if (el.playerSearch) el.playerSearch.value = "";
   renderSessionSnapshot();
   renderPowerDashboard();
+  renderLeagueAnalyticsDashboard();
   el.powerSection?.classList.add("hidden");
+  el.analyticsSection?.classList.add("hidden");
+  hideAppPages();
   el.resultsList.innerHTML = "";
   el.resultsSection.classList.add("hidden");
 
@@ -368,12 +428,16 @@ async function loadLeague() {
     renderSessionSnapshot();
     el.identitySection.classList.remove("hidden");
     el.powerSection?.classList.remove("hidden");
+    el.analyticsSection?.classList.remove("hidden");
     el.playerSection.classList.remove("hidden");
     el.settingsSection?.classList.remove("hidden");
+    showAppPages();
     renderPowerDashboard();
+    renderLeagueAnalyticsDashboard();
     setStatus(`Loaded ${state.leagueName}. Player names are still syncing...`, { loading: true });
     primeValuationData();
     loadTrendingPlayers();
+    loadLeagueTransactions(leagueId, league);
 
     loadPlayersWithCache()
       .then((players) => {
@@ -389,6 +453,7 @@ async function loadLeague() {
         hydrateManagerSelector();
         syncTradeModeUi();
         renderPowerDashboard();
+        renderLeagueAnalyticsDashboard();
         setStatus(`Loaded ${state.leagueName}. Choose your team to continue.`, { ok: true });
       })
       .catch((err) => {
@@ -396,6 +461,7 @@ async function loadLeague() {
         state.playerMetadataFailed = true;
         syncTradeModeUi();
         renderPowerDashboard();
+        renderLeagueAnalyticsDashboard();
         setStatus(
           `Loaded ${state.leagueName}, but could not pull full NFL names (${err.message}). You can still use the app.`,
           { ok: true }
@@ -628,7 +694,89 @@ async function loadTrendingPlayers() {
     state.trendingLoaded = false;
   } finally {
     renderPowerDashboard();
+    renderLeagueAnalyticsDashboard();
   }
+}
+
+async function loadLeagueTransactions(leagueId, league) {
+  const loadLeagueId = String(leagueId || "");
+  state.transactions = [];
+  state.transactionsLoaded = false;
+  state.transactionsFailed = false;
+  state.transactionWeeksLoaded = 0;
+  state.transactionLoadError = "";
+  renderLeagueAnalyticsDashboard();
+
+  const weeks = buildTransactionWeeks(league);
+  try {
+    const settled = await Promise.allSettled(
+      weeks.map((week) =>
+        apiGetWithRetry(`/league/${loadLeagueId}/transactions/${week}`, { timeoutMs: 10000, retries: 1 })
+          .then((transactions) => ({
+            week,
+            transactions: Array.isArray(transactions) ? transactions : [],
+          }))
+      )
+    );
+
+    if (state.leagueId !== loadLeagueId) return;
+
+    const transactions = [];
+    let loadedWeeks = 0;
+    settled.forEach((result) => {
+      if (result.status !== "fulfilled") return;
+      loadedWeeks += 1;
+      result.value.transactions.forEach((transaction) => {
+        transactions.push({
+          ...transaction,
+          leg: transaction?.leg ?? result.value.week,
+          week: result.value.week,
+        });
+      });
+    });
+
+    state.transactions = dedupeTransactions(transactions);
+    state.transactionWeeksLoaded = loadedWeeks;
+    state.transactionsLoaded = true;
+    state.transactionsFailed = loadedWeeks === 0;
+    state.transactionLoadError = loadedWeeks === 0 ? "Sleeper did not return transaction weeks for this league." : "";
+  } catch (err) {
+    if (state.leagueId !== loadLeagueId) return;
+    state.transactions = [];
+    state.transactionsLoaded = true;
+    state.transactionsFailed = true;
+    state.transactionLoadError = err.message || "Could not load Sleeper transactions.";
+  } finally {
+    if (state.leagueId === loadLeagueId) {
+      renderLeagueAnalyticsDashboard();
+    }
+  }
+}
+
+function buildTransactionWeeks(league) {
+  const playoffStart = Number(league?.settings?.playoff_week_start);
+  const tradeDeadline = Number(league?.settings?.trade_deadline);
+  const configuredEnd = Math.max(
+    TRANSACTION_WEEK_FALLBACK_END,
+    Number.isFinite(playoffStart) ? playoffStart + 3 : 0,
+    Number.isFinite(tradeDeadline) ? tradeDeadline + 6 : 0
+  );
+  const endWeek = clamp(configuredEnd, TRANSACTION_WEEK_START, 22);
+  const weeks = [];
+  for (let week = TRANSACTION_WEEK_START; week <= endWeek; week++) {
+    weeks.push(week);
+  }
+  return weeks;
+}
+
+function dedupeTransactions(transactions) {
+  const byId = new Map();
+  transactions.forEach((transaction) => {
+    const transactionId = String(transaction?.transaction_id || "");
+    if (!transactionId || byId.has(transactionId)) return;
+    byId.set(transactionId, transaction);
+  });
+  return [...byId.values()].sort((a, b) => Number(b.status_updated || b.created || 0) - Number(a.status_updated || a.created || 0));
 }
 
 async function apiGetWithRetry(path, { timeoutMs = 25000, retries = 0 } = {}) {
@@ -723,6 +871,7 @@ function hydrateManagerSelector() {
   renderPlayerSearch();
   renderSessionSnapshot();
   renderPowerDashboard();
+  renderLeagueAnalyticsDashboard();
 }
 
 function getMyRoster() {
@@ -808,6 +957,1020 @@ function renderPowerDashboard() {
       </section>
     </div>
   `;
+}
+
+function renderLeagueAnalyticsDashboard() {
+  if (!el.analyticsDashboard) return;
+  const meRoster = getMyRoster();
+  if (!state.league || state.normalizedRosters.length === 0 || !meRoster) {
+    el.analyticsDashboard.innerHTML = `<p class="muted">Choose your team to generate analytics.</p>`;
+    return;
+  }
+
+  const model = buildLeagueAnalyticsModel(meRoster);
+  el.analyticsDashboard.innerHTML = renderAnalyticsDashboard(model);
+}
+
+function buildLeagueAnalyticsModel(meRoster) {
+  const context = buildLeaguePowerContext({
+    league: state.league,
+    rosters: state.normalizedRosters,
+    values: state.values,
+  });
+  const profiles = state.normalizedRosters
+    .map((roster) => buildTeamPowerProfile({
+      roster,
+      values: state.values,
+      league: state.league,
+      context,
+    }))
+    .sort((a, b) => b.score - a.score || a.rank - b.rank || a.managerName.localeCompare(b.managerName));
+  const meProfile = profiles.find((profile) => String(profile.rosterId) === String(meRoster.rosterId))
+    || buildTeamPowerProfile({ roster: meRoster, values: state.values, league: state.league, context });
+  const market = buildTradeMarketAnalytics(meRoster);
+  const rosterAnalytics = buildRosterAnalytics(meRoster, meProfile, context, profiles, market);
+  const leagueAnalytics = buildLeagueAnalytics(context, profiles, market);
+  const quests = buildAnalyticsQuests(meProfile, rosterAnalytics, leagueAnalytics, market);
+
+  return {
+    meRoster,
+    meProfile,
+    context,
+    profiles,
+    market,
+    rosterAnalytics,
+    leagueAnalytics,
+    quests,
+  };
+}
+
+function renderAnalyticsDashboard(model) {
+  const { meProfile, market, rosterAnalytics, leagueAnalytics, quests } = model;
+  const syncLabel = state.transactionsLoaded
+    ? state.transactionsFailed
+      ? "Trade market unavailable"
+      : `${state.transactionWeeksLoaded} transaction weeks scanned`
+    : "Trade market syncing";
+  const favoritePartnerLabel = market.favoritePartner
+    ? market.favoritePartner.otherManagerName
+    : market.myTradeCount > 0 ? "No repeat partner" : "No trades yet";
+  const leaguePairLabel = market.topPair
+    ? market.topPair.managerNames.join(" / ")
+    : "No trade pairs yet";
+
+  return `
+    <div class="analytics-hero">
+      <div class="analytics-hero-main">
+        <span class="analytics-kicker">${escapeHtml(state.leagueName || "League")} Command Center</span>
+        <h3>${escapeHtml(meProfile.managerName)} GM profile</h3>
+        <p>${escapeHtml(rosterAnalytics.identityLine)}</p>
+        <div class="power-badge-row">
+          ${rosterAnalytics.badges.map((badge) => `<span class="power-badge">${escapeHtml(badge)}</span>`).join("")}
+          <span class="power-badge muted-badge">${escapeHtml(syncLabel)}</span>
+        </div>
+      </div>
+      <div class="gm-level-panel">
+        <span>GM Level</span>
+        <strong>${rosterAnalytics.gmLevel}</strong>
+        <small>${escapeHtml(rosterAnalytics.gmTitle)}</small>
+      </div>
+    </div>
+
+    <div class="analytics-metric-grid">
+      ${renderAnalyticsMetric("Team Power", `${meProfile.score}/100`, `${formatStarterRank(meProfile.rank, meProfile.totalTeams)} lineup`, "blue")}
+      ${renderAnalyticsMetric("My Trades", formatNumber(market.myTradeCount), `${market.myTradeRankLabel} in market activity`, "green")}
+      ${renderAnalyticsMetric("League Trades", formatNumber(market.tradeCount), `${formatNumber(market.movedAssetCount)} assets moved`, "gold")}
+      ${renderAnalyticsMetric("Favorite Partner", favoritePartnerLabel, market.favoritePartner ? `${market.favoritePartner.count} trade${market.favoritePartner.count === 1 ? "" : "s"}` : "Trade graph empty", "blue")}
+      ${renderAnalyticsMetric("League Rivalry", leaguePairLabel, market.topPair ? `${market.topPair.count} completed trade${market.topPair.count === 1 ? "" : "s"}` : "No completed trades", "rose")}
+      ${renderAnalyticsMetric("Chaos Index", `${market.chaosScore}/99`, leagueAnalytics.marketTempoLabel, "gold")}
+    </div>
+
+    <div class="analytics-two-col">
+      ${renderTeamDnaPanel(rosterAnalytics, meProfile)}
+      ${renderTradeMarketPanel(market)}
+    </div>
+
+    <div class="analytics-two-col">
+      ${renderLeagueEconomyPanel(leagueAnalytics, market)}
+      ${renderQuestPanel(quests)}
+    </div>
+
+    ${renderPowerRankingsPanel(model.profiles)}
+
+    <div class="analytics-two-col">
+      ${renderRecentTradesPanel(market)}
+      ${renderAssetMarketPanel(market)}
+    </div>
+  `;
+}
+
+function renderAnalyticsMetric(label, value, detail, tone = "") {
+  return `
+    <section class="analytics-metric ${tone}">
+      <span>${escapeHtml(label)}</span>
+      <strong>${escapeHtml(String(value))}</strong>
+      <small>${escapeHtml(detail || "")}</small>
+    </section>
+  `;
+}
+
+function renderTeamDnaPanel(rosterAnalytics, profile) {
+  return `
+    <section class="analytics-panel">
+      <div class="analytics-panel-heading">
+        <h3>Team DNA</h3>
+        <span>${escapeHtml(profile.laneLabel)}</span>
+      </div>
+      <div class="dna-grid">
+        ${renderDnaCell("Win-Now", rosterAnalytics.winNowScore, rosterAnalytics.winNowLabel)}
+        ${renderDnaCell("Future", rosterAnalytics.futureScore, rosterAnalytics.futureLabel)}
+        ${renderDnaCell("Depth", rosterAnalytics.depthScore, rosterAnalytics.depthLabel)}
+        ${renderDnaCell("Leverage", rosterAnalytics.leverageScore, rosterAnalytics.leverageLabel)}
+      </div>
+      <div class="analytics-progress-list">
+        ${renderAnalyticsProgressRow("Starter edge", rosterAnalytics.starterEdgePercent, rosterAnalytics.starterEdgeLabel)}
+        ${renderAnalyticsProgressRow("Pick vault", rosterAnalytics.pickVaultPercent, rosterAnalytics.pickVaultLabel)}
+        ${renderAnalyticsProgressRow("Value concentration", rosterAnalytics.concentrationPercent, rosterAnalytics.concentrationLabel)}
+        ${renderAnalyticsProgressRow("Age curve", rosterAnalytics.timelinePercent, rosterAnalytics.timelineLabel)}
+      </div>
+      <div class="mini-scout-list">
+        ${rosterAnalytics.scoutingNotes.map((note) => renderMiniScout(note)).join("")}
+      </div>
+    </section>
+  `;
+}
+
+function renderDnaCell(label, score, detail) {
+  return `
+    <section class="dna-cell">
+      <div class="dna-score-ring" style="--score:${score}">
+        <strong>${score}</strong>
+      </div>
+      <span>${escapeHtml(label)}</span>
+      <small>${escapeHtml(detail)}</small>
+    </section>
+  `;
+}
+
+function renderAnalyticsProgressRow(label, percent, detail) {
+  const safePercent = clamp(Math.round(percent), 0, 100);
+  return `
+    <div class="analytics-progress-row">
+      <div>
+        <strong>${escapeHtml(label)}</strong>
+        <span>${escapeHtml(detail)}</span>
+      </div>
+      <div class="meter-track" aria-hidden="true">
+        <span style="width:${safePercent}%"></span>
+      </div>
+    </div>
+  `;
+}
+
+function renderMiniScout(note) {
+  return `
+    <section class="mini-scout ${note.tone || ""}">
+      <strong>${escapeHtml(note.title)}</strong>
+      <span>${escapeHtml(note.body)}</span>
+    </section>
+  `;
+}
+
+function renderTradeMarketPanel(market) {
+  return `
+    <section class="analytics-panel">
+      <div class="analytics-panel-heading">
+        <h3>Trade Market</h3>
+        <span>${escapeHtml(market.tradeStatusLabel)}</span>
+      </div>
+      <div class="market-split-grid">
+        ${renderMarketSplit("Players", market.playerMovementCount, market.movedAssetCount)}
+        ${renderMarketSplit("Picks", market.pickMovementCount, market.movedAssetCount)}
+        ${renderMarketSplit("Multi-Team", market.multiTeamTradeCount, market.tradeCount)}
+      </div>
+      <div class="analytics-list">
+        ${market.myPartners.length > 0
+          ? market.myPartners.slice(0, 5).map((partner) => renderTradePartnerRow(partner)).join("")
+          : `<p class="muted small analytics-empty">No completed trades for your roster in the scanned weeks.</p>`}
+      </div>
+      <div class="timeline-bars">
+        ${market.weeklyTimeline.map((week) => renderTimelineBar(week, market.maxWeeklyTradeCount)).join("")}
+      </div>
+    </section>
+  `;
+}
+
+function renderMarketSplit(label, count, total) {
+  const pct = total > 0 ? Math.round(count / total * 100) : 0;
+  return `
+    <section class="market-split">
+      <strong>${formatNumber(count)}</strong>
+      <span>${escapeHtml(label)}</span>
+      <div class="meter-track" aria-hidden="true"><span style="width:${pct}%"></span></div>
+    </section>
+  `;
+}
+
+function renderTradePartnerRow(partner) {
+  const width = clamp(partner.sharePct, 8, 100);
+  return `
+    <div class="analytics-row">
+      <div>
+        <strong>${escapeHtml(partner.otherManagerName)}</strong>
+        <span>${formatNumber(partner.assetsMoved)} assets • ${formatNumber(partner.valueMoved)} value moved</span>
+      </div>
+      <div class="row-meter" aria-hidden="true"><span style="width:${width}%"></span></div>
+      <em>${partner.count}</em>
+    </div>
+  `;
+}
+
+function renderTimelineBar(week, maxCount) {
+  const height = maxCount > 0 ? clamp(Math.round(week.count / maxCount * 100), 8, 100) : 8;
+  return `
+    <div class="timeline-bar" title="Week ${week.week}: ${week.count} trade${week.count === 1 ? "" : "s"}">
+      <span style="height:${height}%"></span>
+      <small>${week.week}</small>
+    </div>
+  `;
+}
+
+function renderLeagueEconomyPanel(leagueAnalytics, market) {
+  return `
+    <section class="analytics-panel">
+      <div class="analytics-panel-heading">
+        <h3>League Economy</h3>
+        <span>${escapeHtml(leagueAnalytics.parityLabel)}</span>
+      </div>
+      <div class="economy-grid">
+        ${renderEconomyCell("Contenders", leagueAnalytics.contenderCount, "top lanes")}
+        ${renderEconomyCell("Rebuilders", leagueAnalytics.rebuildCount, "future lanes")}
+        ${renderEconomyCell("Middle Builds", leagueAnalytics.middleCount, "swing teams")}
+        ${renderEconomyCell("Traded Picks", state.tradedPicks.length, "pick records")}
+      </div>
+      <div class="analytics-progress-list">
+        ${renderAnalyticsProgressRow("Power parity", leagueAnalytics.parityScore, leagueAnalytics.powerGapLabel)}
+        ${renderAnalyticsProgressRow("Market tempo", market.chaosScore, leagueAnalytics.marketTempoLabel)}
+        ${renderAnalyticsProgressRow("Future capital spread", leagueAnalytics.pickSpreadScore, leagueAnalytics.pickSpreadLabel)}
+      </div>
+      <div class="analytics-list">
+        ${leagueAnalytics.managerSpotlights.map((spotlight) => renderSpotlightRow(spotlight)).join("")}
+      </div>
+    </section>
+  `;
+}
+
+function renderEconomyCell(label, value, detail) {
+  return `
+    <section class="economy-cell">
+      <strong>${formatNumber(value)}</strong>
+      <span>${escapeHtml(label)}</span>
+      <small>${escapeHtml(detail)}</small>
+    </section>
+  `;
+}
+
+function renderSpotlightRow(spotlight) {
+  return `
+    <div class="spotlight-row ${spotlight.tone || ""}">
+      <strong>${escapeHtml(spotlight.label)}</strong>
+      <span>${escapeHtml(spotlight.value)}</span>
+    </div>
+  `;
+}
+
+function renderQuestPanel(quests) {
+  return `
+    <section class="analytics-panel">
+      <div class="analytics-panel-heading">
+        <h3>Quest Board</h3>
+        <span>${quests.length} active</span>
+      </div>
+      <div class="quest-list">
+        ${quests.map((quest) => `
+          <section class="quest-item ${quest.tone || ""}">
+            <div>
+              <strong>${escapeHtml(quest.title)}</strong>
+              <span>${escapeHtml(quest.body)}</span>
+            </div>
+            <em>${formatNumber(quest.xp)} XP</em>
+          </section>
+        `).join("")}
+      </div>
+    </section>
+  `;
+}
+
+function renderPowerRankingsPanel(profiles) {
+  return `
+    <section class="analytics-panel analytics-panel-wide">
+      <div class="analytics-panel-heading">
+        <h3>League Power Rankings</h3>
+        <span>top ${Math.min(ANALYTICS_POWER_RANK_LIMIT, profiles.length)}</span>
+      </div>
+      <div class="power-rank-table">
+        ${profiles.slice(0, ANALYTICS_POWER_RANK_LIMIT).map((profile, index) => renderPowerRankRow(profile, index)).join("")}
+      </div>
+    </section>
+  `;
+}
+
+function renderPowerRankRow(profile, index) {
+  const isMe = String(profile.rosterId) === String(state.meRosterId);
+  return `
+    <div class="power-rank-row ${isMe ? "you" : ""}">
+      <span class="rank-number">${index + 1}</span>
+      <div>
+        <strong>${escapeHtml(profile.managerName)}</strong>
+        <span>${escapeHtml(profile.laneLabel)} • ${profile.assetSummary.averageAgeLabel} avg age</span>
+      </div>
+      <span>${formatNumber(profile.metrics.starterValue)} starters</span>
+      <span>${formatNumber(profile.assetSummary.pickValue)} picks</span>
+      <strong>${profile.score}</strong>
+    </div>
+  `;
+}
+
+function renderRecentTradesPanel(market) {
+  return `
+    <section class="analytics-panel">
+      <div class="analytics-panel-heading">
+        <h3>Recent Trades</h3>
+        <span>${market.recentTrades.length} shown</span>
+      </div>
+      <div class="recent-trade-list">
+        ${market.recentTrades.length > 0
+          ? market.recentTrades.map((trade) => renderRecentTrade(trade)).join("")
+          : `<p class="muted small analytics-empty">No completed trades found in the scanned weeks.</p>`}
+      </div>
+    </section>
+  `;
+}
+
+function renderRecentTrade(trade) {
+  return `
+    <section class="recent-trade">
+      <div>
+        <strong>${escapeHtml(trade.title)}</strong>
+        <span>${escapeHtml(trade.subtitle)}</span>
+      </div>
+      <p>${escapeHtml(trade.preview)}</p>
+    </section>
+  `;
+}
+
+function renderAssetMarketPanel(market) {
+  return `
+    <section class="analytics-panel">
+      <div class="analytics-panel-heading">
+        <h3>Asset Market</h3>
+        <span>${formatNumber(market.totalMovedValue)} value moved</span>
+      </div>
+      <div class="analytics-list">
+        ${market.assetLeaders.length > 0
+          ? market.assetLeaders.slice(0, ANALYTICS_ASSET_LEADER_LIMIT).map((asset) => renderAssetMarketRow(asset, market.topMovedAssetCount)).join("")
+          : `<p class="muted small analytics-empty">No traded assets to rank yet.</p>`}
+      </div>
+      <div class="manager-heat-list">
+        ${market.managerLeaderboard.slice(0, 5).map((manager) => renderManagerHeatRow(manager, market.maxManagerTradeCount)).join("")}
+      </div>
+    </section>
+  `;
+}
+
+function renderAssetMarketRow(asset, maxCount) {
+  const width = maxCount > 0 ? clamp(Math.round(asset.count / maxCount * 100), 8, 100) : 8;
+  return `
+    <div class="analytics-row">
+      <div>
+        <strong>${escapeHtml(asset.name)}</strong>
+        <span>${escapeHtml(asset.typeLabel)} • ${formatNumber(asset.totalValue)} value</span>
+      </div>
+      <div class="row-meter" aria-hidden="true"><span style="width:${width}%"></span></div>
+      <em>${asset.count}</em>
+    </div>
+  `;
+}
+
+function renderManagerHeatRow(manager, maxTrades) {
+  const width = maxTrades > 0 ? clamp(Math.round(manager.tradeCount / maxTrades * 100), 8, 100) : 8;
+  return `
+    <div class="manager-heat-row">
+      <strong>${escapeHtml(manager.managerName)}</strong>
+      <div class="meter-track" aria-hidden="true"><span style="width:${width}%"></span></div>
+      <span>${manager.tradeCount} trades</span>
+    </div>
+  `;
+}
+
+function buildRosterAnalytics(meRoster, profile, context, profiles, market) {
+  const assetSummary = profile.assetSummary;
+  const starterPercent = Math.round(percentileFromValues(context.starterValues, profile.metrics.starterValue) * 100);
+  const benchPercent = Math.round(percentileFromValues(context.benchValues, profile.metrics.benchValue) * 100);
+  const pickPercent = Math.round(percentileFromValues(context.pickValues, assetSummary.pickValue) * 100);
+  const timelinePercent = Math.round(calculateTimelineScore(assetSummary) * 100);
+  const topThreeValue = assetSummary.topPlayers.slice(0, 3).reduce((sum, entry) => sum + entry.value, 0);
+  const concentrationPercent = assetSummary.playerValue > 0
+    ? Math.round(topThreeValue / assetSummary.playerValue * 100)
+    : 0;
+  const leverageScore = clamp(Math.round((pickPercent * 0.35) + (benchPercent * 0.25) + (100 - concentrationPercent) * 0.2 + market.myMarketSharePct * 0.2), 1, 99);
+  const winNowScore = clamp(Math.round(profile.score * 0.68 + starterPercent * 0.32), 1, 99);
+  const futureScore = clamp(Math.round(pickPercent * 0.38 + timelinePercent * 0.42 + Math.min(100, assetSummary.youthCount * 8) * 0.2), 1, 99);
+  const depthScore = clamp(Math.round(benchPercent * 0.7 + (100 - concentrationPercent) * 0.3), 1, 99);
+  const gmLevel = clamp(Math.round(profile.score * 0.62 + market.myTradeCount * 5 + pickPercent * 0.12 + starterPercent * 0.18), 1, 99);
+  const topProfile = profiles[0];
+  const strongest = profile.strongestPosition?.position || "best position";
+  const weakest = profile.weakestPosition?.position || "upgrade spot";
+  const badges = [
+    profile.laneLabel,
+    market.myTradeCount >= 3 ? "Active Dealmaker" : "Market Watcher",
+    `${strongest} Edge`,
+    `${weakest} Quest`,
+  ];
+
+  return {
+    gmLevel,
+    gmTitle: classifyGmTitle({ gmLevel, market, profile }),
+    identityLine: buildGmIdentityLine(profile, market, topProfile),
+    badges: [...new Set(badges)].slice(0, 5),
+    winNowScore,
+    futureScore,
+    depthScore,
+    leverageScore,
+    winNowLabel: `${formatStarterRank(profile.rank, profile.totalTeams)} lineup`,
+    futureLabel: `${assetSummary.firstRoundPickCount} first${assetSummary.firstRoundPickCount === 1 ? "" : "s"}`,
+    depthLabel: `${ordinal(benchPercent)} percentile bench`,
+    leverageLabel: market.favoritePartner ? `${market.favoritePartner.otherManagerName} link` : "open market",
+    starterEdgePercent: starterPercent,
+    starterEdgeLabel: `${ordinal(starterPercent)} percentile starter value`,
+    pickVaultPercent: pickPercent,
+    pickVaultLabel: `${formatNumber(assetSummary.pickValue)} pick value`,
+    concentrationPercent,
+    concentrationLabel: `${concentrationPercent}% of player value in top 3`,
+    timelinePercent,
+    timelineLabel: `${assetSummary.averageAgeLabel} weighted top-core age`,
+    scoutingNotes: buildRosterScoutingNotes(meRoster, profile, market, concentrationPercent),
+  };
+}
+
+function classifyGmTitle({ gmLevel, market, profile }) {
+  if (gmLevel >= 88 && market.myTradeCount >= 3) return "Market Overlord";
+  if (profile.score >= 88) return "Title Architect";
+  if (profile.assetSummary.firstRoundPickCount >= 4) return "Pick Baron";
+  if (market.myTradeCount >= 4) return "Deal Flow Engine";
+  if (profile.lane.id === "rebuild") return "Timeline Engineer";
+  return "Roster Strategist";
+}
+
+function buildGmIdentityLine(profile, market, topProfile) {
+  const lead = `${profile.laneLabel} with a ${profile.grade} power grade`;
+  const rank = `ranked ${formatStarterRank(profile.rank, profile.totalTeams)} by lineup value`;
+  const marketLine = market.myTradeCount > 0
+    ? `${market.myTradeCount} completed trade${market.myTradeCount === 1 ? "" : "s"} in the scanned market`
+    : "no completed trades in the scanned market";
+  const chaseLine = topProfile && String(topProfile.rosterId) !== String(profile.rosterId)
+    ? `The current power target is ${topProfile.managerName}.`
+    : "You sit at the top of the current power board.";
+  return `${lead}, ${rank}, with ${marketLine}. ${chaseLine}`;
+}
+
+function buildRosterScoutingNotes(meRoster, profile, market, concentrationPercent) {
+  const notes = [];
+  if (profile.strongestPosition) {
+    notes.push({
+      title: "Roster Edge",
+      body: `${profile.strongestPosition.position} is your strongest scoring lever at ${profile.strongestPosition.rankLabel}.`,
+      tone: "green",
+    });
+  }
+  if (profile.weakestPosition) {
+    notes.push({
+      title: "Roster Leak",
+      body: `${profile.weakestPosition.position} is the cleanest upgrade lane at ${profile.weakestPosition.rankLabel}.`,
+      tone: profile.weakestPosition.percentile <= 0.42 ? "gold" : "blue",
+    });
+  }
+  if (concentrationPercent >= 55) {
+    notes.push({
+      title: "Fragility Watch",
+      body: `Your top three players hold ${concentrationPercent}% of player value, so one injury can swing the profile.`,
+      tone: "rose",
+    });
+  } else {
+    notes.push({
+      title: "Depth Shape",
+      body: `Value is spread well enough that the roster can absorb a consolidation trade.`,
+      tone: "blue",
+    });
+  }
+  if (market.favoritePartner) {
+    notes.push({
+      title: "Trade Route",
+      body: `${market.favoritePartner.otherManagerName} is your most common trade lane in this league sample.`,
+      tone: "green",
+    });
+  } else {
+    notes.push({
+      title: "Trade Route",
+      body: `${meRoster.manager.displayName} has no repeat trade partner in the scanned weeks.`,
+      tone: "gold",
+    });
+  }
+  return notes.slice(0, 4);
+}
+
+function buildLeagueAnalytics(context, profiles, market) {
+  const scores = profiles.map((profile) => profile.score).filter(Number.isFinite);
+  const starterValues = context.starterValues.filter(Number.isFinite);
+  const pickValues = context.pickValues.filter(Number.isFinite);
+  const maxStarter = starterValues.length ? Math.max(...starterValues) : 0;
+  const minStarter = starterValues.length ? Math.min(...starterValues) : 0;
+  const powerGap = Math.max(0, maxStarter - minStarter);
+  const parityScore = maxStarter > 0 ? clamp(Math.round(100 - (powerGap / maxStarter * 100)), 1, 99) : 50;
+  const maxPick = pickValues.length ? Math.max(...pickValues) : 0;
+  const minPick = pickValues.length ? Math.min(...pickValues) : 0;
+  const pickSpread = Math.max(0, maxPick - minPick);
+  const pickSpreadScore = maxPick > 0 ? clamp(Math.round(pickSpread / maxPick * 100), 1, 99) : 0;
+  const contenderCount = profiles.filter((profile) => ["contender", "fragile-contender", "playoff-hunter"].includes(profile.lane.id)).length;
+  const rebuildCount = profiles.filter((profile) => profile.lane.id === "rebuild").length;
+  const middleCount = Math.max(0, profiles.length - contenderCount - rebuildCount);
+  const topPickProfile = profiles.slice().sort((a, b) => b.assetSummary.pickValue - a.assetSummary.pickValue)[0];
+  const youngestProfile = profiles
+    .filter((profile) => Number.isFinite(profile.assetSummary.averageAge))
+    .sort((a, b) => a.assetSummary.averageAge - b.assetSummary.averageAge)[0];
+  const oldestProfile = profiles
+    .filter((profile) => Number.isFinite(profile.assetSummary.averageAge))
+    .sort((a, b) => b.assetSummary.averageAge - a.assetSummary.averageAge)[0];
+  const medianScore = median(scores);
+
+  return {
+    contenderCount,
+    rebuildCount,
+    middleCount,
+    parityScore,
+    parityLabel: parityScore >= 72 ? "tight race" : parityScore >= 48 ? "tiered league" : "power gap",
+    powerGapLabel: `${formatNumber(powerGap)} starter gap from top to bottom`,
+    pickSpreadScore,
+    pickSpreadLabel: `${formatNumber(pickSpread)} pick-value spread`,
+    marketTempoLabel: market.tradeCount >= profiles.length ? "active trade room" : market.tradeCount > 0 ? "selective trade room" : "quiet trade room",
+    medianScore,
+    managerSpotlights: [
+      topPickProfile ? {
+        label: "Pick Vault Leader",
+        value: `${topPickProfile.managerName} (${formatNumber(topPickProfile.assetSummary.pickValue)})`,
+        tone: "gold",
+      } : null,
+      youngestProfile ? {
+        label: "Youngest Core",
+        value: `${youngestProfile.managerName} (${youngestProfile.assetSummary.averageAgeLabel})`,
+        tone: "green",
+      } : null,
+      oldestProfile ? {
+        label: "Oldest Core",
+        value: `${oldestProfile.managerName} (${oldestProfile.assetSummary.averageAgeLabel})`,
+        tone: "rose",
+      } : null,
+      profiles[0] ? {
+        label: "Power Leader",
+        value: `${profiles[0].managerName} (${profiles[0].score}/100)`,
+        tone: "blue",
+      } : null,
+    ].filter(Boolean),
+  };
+}
+
+function buildAnalyticsQuests(profile, rosterAnalytics, leagueAnalytics, market) {
+  const quests = [];
+  if (profile.weakestPosition) {
+    quests.push({
+      title: `Patch ${profile.weakestPosition.position}`,
+      body: `Raise the weakest position from ${profile.weakestPosition.rankLabel}; even a mid-tier starter can move the power score.`,
+      xp: 420,
+      tone: "gold",
+    });
+  }
+  if (profile.assetSummary.firstRoundPickCount > 0 && profile.score >= 78) {
+    quests.push({
+      title: "Convert Ammo",
+      body: `Use one future first as a catalyst for a starter upgrade while the roster is in ${profile.laneLabel} mode.`,
+      xp: 360,
+      tone: "green",
+    });
+  }
+  if (rosterAnalytics.concentrationPercent >= 55) {
+    quests.push({
+      title: "Insure The Core",
+      body: `Top-heavy value profile detected; explore one depth-positive trade that does not drain starter value.`,
+      xp: 300,
+      tone: "rose",
+    });
+  }
+  if (market.favoritePartner) {
+    quests.push({
+      title: `Reopen ${market.favoritePartner.otherManagerName}`,
+      body: `${market.favoritePartner.count} prior trade${market.favoritePartner.count === 1 ? "" : "s"} make this the warmest negotiation lane.`,
+      xp: 260,
+      tone: "blue",
+    });
+  } else {
+    quests.push({
+      title: "Create A Trade Route",
+      body: `No recurring partner found; identify one manager with a roster need that matches your surplus.`,
+      xp: 240,
+      tone: "blue",
+    });
+  }
+  if (leagueAnalytics.parityScore <= 48) {
+    quests.push({
+      title: "Attack The Gap",
+      body: `The league has a wide power gap, so one aggressive consolidation can matter more than a small value win.`,
+      xp: 340,
+      tone: "gold",
+    });
+  }
+  if (market.myTradeCount === 0 && market.tradeCount > 0) {
+    quests.push({
+      title: "Enter The Market",
+      body: `The league has completed ${market.tradeCount} trade${market.tradeCount === 1 ? "" : "s"} while you stayed quiet.`,
+      xp: 220,
+      tone: "green",
+    });
+  }
+  return quests.slice(0, 5);
+}
+
+function buildTradeMarketAnalytics(meRoster) {
+  const tradeTransactions = state.transactions
+    .filter((transaction) => transaction?.type === "trade" && transaction?.status === "complete")
+    .sort((a, b) => Number(b.status_updated || b.created || 0) - Number(a.status_updated || a.created || 0));
+  const allCompleteTransactions = state.transactions.filter((transaction) => transaction?.status === "complete");
+  const meRosterKey = normalizeRosterIdKey(meRoster.rosterId);
+  const pairMap = new Map();
+  const managerStats = new Map();
+  const assetMap = new Map();
+  const weeklyMap = new Map();
+  let movedAssetCount = 0;
+  let pickMovementCount = 0;
+  let playerMovementCount = 0;
+  let totalMovedValue = 0;
+  let multiTeamTradeCount = 0;
+
+  state.normalizedRosters.forEach((roster) => {
+    managerStats.set(normalizeRosterIdKey(roster.rosterId), {
+      rosterId: roster.rosterId,
+      managerName: roster.manager.displayName,
+      tradeCount: 0,
+      sentAssets: 0,
+      receivedAssets: 0,
+      sentValue: 0,
+      receivedValue: 0,
+    });
+  });
+
+  tradeTransactions.forEach((transaction) => {
+    const participantIds = getTransactionParticipantIds(transaction);
+    if (participantIds.length > 2) multiTeamTradeCount += 1;
+    const movements = buildTradeMovements(transaction);
+    const movedValue = movements.reduce((sum, movement) => sum + movement.value, 0);
+    const week = Number(transaction.leg || transaction.week || 0);
+    if (!weeklyMap.has(week)) weeklyMap.set(week, { week, count: 0, movedValue: 0 });
+    weeklyMap.get(week).count += 1;
+    weeklyMap.get(week).movedValue += movedValue;
+
+    participantIds.forEach((rosterId) => {
+      const stats = ensureManagerTradeStats(managerStats, rosterId);
+      stats.tradeCount += 1;
+    });
+
+    for (let i = 0; i < participantIds.length; i++) {
+      for (let j = i + 1; j < participantIds.length; j++) {
+        const left = participantIds[i];
+        const right = participantIds[j];
+        const key = buildRosterPairKey(left, right);
+        const pairMovements = movements.filter((movement) =>
+          buildRosterPairKey(movement.fromRosterId, movement.toRosterId) === key
+        );
+        if (!pairMap.has(key)) {
+          pairMap.set(key, {
+            rosterIds: key.split("|"),
+            count: 0,
+            assetsMoved: 0,
+            valueMoved: 0,
+          });
+        }
+        const pair = pairMap.get(key);
+        pair.count += 1;
+        pair.assetsMoved += pairMovements.length || movements.length;
+        pair.valueMoved += pairMovements.length
+          ? pairMovements.reduce((sum, movement) => sum + movement.value, 0)
+          : movedValue;
+      }
+    }
+
+    movements.forEach((movement) => {
+      movedAssetCount += 1;
+      totalMovedValue += movement.value;
+      if (movement.assetType === "pick") {
+        pickMovementCount += 1;
+      } else {
+        playerMovementCount += 1;
+      }
+
+      const fromStats = ensureManagerTradeStats(managerStats, movement.fromRosterId);
+      const toStats = ensureManagerTradeStats(managerStats, movement.toRosterId);
+      fromStats.sentAssets += 1;
+      fromStats.sentValue += movement.value;
+      toStats.receivedAssets += 1;
+      toStats.receivedValue += movement.value;
+
+      if (!assetMap.has(movement.assetId)) {
+        assetMap.set(movement.assetId, {
+          assetId: movement.assetId,
+          name: movement.name,
+          assetType: movement.assetType,
+          typeLabel: movement.assetType === "pick" ? "Pick" : movement.positionLabel || "Player",
+          count: 0,
+          totalValue: 0,
+        });
+      }
+      const assetEntry = assetMap.get(movement.assetId);
+      assetEntry.count += 1;
+      assetEntry.totalValue += movement.value;
+    });
+  });
+
+  const managerLeaderboard = [...managerStats.values()]
+    .sort((a, b) => b.tradeCount - a.tradeCount || b.sentValue + b.receivedValue - (a.sentValue + a.receivedValue) || a.managerName.localeCompare(b.managerName));
+  const myStats = managerStats.get(meRosterKey) || ensureManagerTradeStats(managerStats, meRosterKey);
+  const myTradeRank = managerLeaderboard.findIndex((manager) => String(manager.rosterId) === String(meRoster.rosterId)) + 1;
+  const pairLeaders = [...pairMap.values()]
+    .map((pair) => ({
+      ...pair,
+      managerNames: pair.rosterIds.map(getRosterManagerName),
+      sharePct: tradeTransactions.length > 0 ? Math.round(pair.count / tradeTransactions.length * 100) : 0,
+    }))
+    .sort((a, b) => b.count - a.count || b.valueMoved - a.valueMoved || a.managerNames.join("").localeCompare(b.managerNames.join("")));
+  const myPartners = pairLeaders
+    .filter((pair) => pair.rosterIds.includes(meRosterKey))
+    .map((pair) => {
+      const otherRosterId = pair.rosterIds.find((rosterId) => rosterId !== meRosterKey);
+      return {
+        ...pair,
+        otherRosterId,
+        otherManagerName: getRosterManagerName(otherRosterId),
+      };
+    });
+  const assetLeaders = [...assetMap.values()]
+    .sort((a, b) => b.count - a.count || b.totalValue - a.totalValue || a.name.localeCompare(b.name));
+  const weeklyTimeline = buildWeeklyTradeTimeline(weeklyMap);
+  const maxWeeklyTradeCount = weeklyTimeline.reduce((max, week) => Math.max(max, week.count), 0);
+  const maxManagerTradeCount = managerLeaderboard.reduce((max, manager) => Math.max(max, manager.tradeCount), 0);
+  const topMovedAssetCount = assetLeaders.reduce((max, asset) => Math.max(max, asset.count), 0);
+  const myMarketSharePct = tradeTransactions.length > 0 ? Math.round(myStats.tradeCount / tradeTransactions.length * 100) : 0;
+  const chaosScore = calculateMarketChaosScore({
+    tradeCount: tradeTransactions.length,
+    rosterCount: state.normalizedRosters.length,
+    pairCount: pairLeaders.length,
+    movedAssetCount,
+    multiTeamTradeCount,
+    totalTransactions: allCompleteTransactions.length,
+  });
+
+  return {
+    tradeCount: tradeTransactions.length,
+    transactionCount: allCompleteTransactions.length,
+    myTradeCount: myStats.tradeCount,
+    myTradeRank,
+    myTradeRankLabel: myTradeRank > 0 ? `${ordinal(myTradeRank)} of ${managerLeaderboard.length}` : "unranked",
+    myMarketSharePct,
+    favoritePartner: myPartners[0] || null,
+    topPair: pairLeaders[0] || null,
+    pairLeaders,
+    myPartners,
+    managerLeaderboard,
+    assetLeaders,
+    recentTrades: tradeTransactions.slice(0, ANALYTICS_RECENT_TRADE_LIMIT).map(buildRecentTradeSummary),
+    weeklyTimeline,
+    maxWeeklyTradeCount,
+    maxManagerTradeCount,
+    topMovedAssetCount,
+    movedAssetCount,
+    pickMovementCount,
+    playerMovementCount,
+    totalMovedValue: Math.round(totalMovedValue),
+    multiTeamTradeCount,
+    chaosScore,
+    tradeStatusLabel: state.transactionsLoaded
+      ? state.transactionsFailed ? "transactions unavailable" : `${tradeTransactions.length} completed trades`
+      : "syncing transactions",
+  };
+}
+
+function ensureManagerTradeStats(managerStats, rosterId) {
+  const rosterKey = normalizeRosterIdKey(rosterId);
+  if (!managerStats.has(rosterKey)) {
+    managerStats.set(rosterKey, {
+      rosterId,
+      managerName: getRosterManagerName(rosterId),
+      tradeCount: 0,
+      sentAssets: 0,
+      receivedAssets: 0,
+      sentValue: 0,
+      receivedValue: 0,
+    });
+  }
+  return managerStats.get(rosterKey);
+}
+
+function getTransactionParticipantIds(transaction) {
+  return [...new Set((transaction?.roster_ids || [])
+    .map(normalizeRosterIdKey)
+    .filter(Boolean))]
+    .sort((a, b) => Number(a) - Number(b) || a.localeCompare(b));
+}
+
+function buildRosterPairKey(leftRosterId, rightRosterId) {
+  return [normalizeRosterIdKey(leftRosterId), normalizeRosterIdKey(rightRosterId)]
+    .filter(Boolean)
+    .sort((a, b) => Number(a) - Number(b) || a.localeCompare(b))
+    .join("|");
+}
+
+function getRosterManagerName(rosterId) {
+  const rosterKey = normalizeRosterIdKey(rosterId);
+  const roster = state.normalizedRosters.find((entry) => normalizeRosterIdKey(entry.rosterId) === rosterKey);
+  return roster?.manager?.displayName || `Roster ${rosterKey || "?"}`;
+}
+
+function buildTradeMovements(transaction) {
+  const movements = [];
+  const adds = transaction?.adds && typeof transaction.adds === "object" ? transaction.adds : {};
+  const drops = transaction?.drops && typeof transaction.drops === "object" ? transaction.drops : {};
+
+  Object.entries(adds).forEach(([playerId, toRosterId]) => {
+    const fromRosterId = drops[playerId];
+    if (fromRosterId == null || toRosterId == null || String(fromRosterId) === String(toRosterId)) return;
+    const asset = buildTransactionPlayerAsset(playerId);
+    const value = getAssetValue(asset, state.values);
+    movements.push({
+      assetId: asset.assetId,
+      assetType: "player",
+      name: asset.name,
+      fromRosterId: normalizeRosterIdKey(fromRosterId),
+      toRosterId: normalizeRosterIdKey(toRosterId),
+      value: Number.isFinite(value) ? value : 0,
+      positionLabel: formatPlayerPositionLabel(asset),
+    });
+  });
+
+  (Array.isArray(transaction?.draft_picks) ? transaction.draft_picks : []).forEach((pick) => {
+    const fromRosterId = pick?.previous_owner_id;
+    const toRosterId = pick?.owner_id;
+    if (fromRosterId == null || toRosterId == null || String(fromRosterId) === String(toRosterId)) return;
+    const asset = buildTransactionPickAsset(pick);
+    const value = getAssetValue(asset, state.values);
+    movements.push({
+      assetId: asset.assetId,
+      assetType: "pick",
+      name: asset.name,
+      fromRosterId: normalizeRosterIdKey(fromRosterId),
+      toRosterId: normalizeRosterIdKey(toRosterId),
+      value: Number.isFinite(value) ? value : 0,
+      positionLabel: "Pick",
+    });
+  });
+
+  return movements;
+}
+
+function buildTransactionPlayerAsset(playerId) {
+  const assetId = `player:${playerId}`;
+  const existingAsset = state.normalizedRosters
+    .flatMap((roster) => roster.assets)
+    .find((asset) => asset.assetId === assetId);
+  if (existingAsset) return existingAsset;
+
+  const raw = state.players?.[String(playerId)] || {};
+  const name = raw.full_name
+    || `${(raw.first_name || "").trim()} ${(raw.last_name || "").trim()}`.trim()
+    || state.valueNameMap[assetId]
+    || `Player ${playerId}`;
+  return {
+    assetId,
+    name,
+    assetType: "player",
+    raw,
+  };
+}
+
+function buildTransactionPickAsset(pick) {
+  const season = pick?.season != null ? String(pick.season) : "";
+  const round = Number(pick?.round);
+  const originalOwner = pick?.roster_id ?? pick?.original_owner ?? "any";
+  const userById = new Map(state.users.map((user) => [String(user.user_id), user]));
+  const rosterById = new Map(state.rosters.map((roster) => [String(roster.roster_id), roster]));
+  const ownerName = resolvePickOwnerName(originalOwner, rosterById, userById);
+  const roundLabel = Number.isFinite(round) ? ordinal(round) : "pick";
+  const name = `${season} ${roundLabel}${ownerName ? ` from ${ownerName}` : ""}`;
+  const normalizedPick = {
+    ...pick,
+    season,
+    round,
+    roster_id: originalOwner,
+    original_owner: originalOwner,
+    owner_id: pick?.owner_id ?? originalOwner,
+  };
+  return {
+    assetId: `pick:${season}:r${round}:${originalOwner}`,
+    valueAssetId: `pick:${season}:r${round}:any`,
+    valueBucket: "any",
+    name,
+    assetType: "pick",
+    raw: normalizedPick,
+  };
+}
+
+function buildWeeklyTradeTimeline(weeklyMap) {
+  const endWeek = Math.max(
+    TRANSACTION_WEEK_FALLBACK_END,
+    ...[...weeklyMap.keys()].map((week) => Number(week)).filter(Number.isFinite)
+  );
+  const weeks = [];
+  for (let week = TRANSACTION_WEEK_START; week <= endWeek; week++) {
+    const entry = weeklyMap.get(week) || { week, count: 0, movedValue: 0 };
+    weeks.push({
+      week,
+      count: entry.count,
+      movedValue: Math.round(entry.movedValue || 0),
+    });
+  }
+  return weeks;
+}
+
+function calculateMarketChaosScore({ tradeCount, rosterCount, pairCount, movedAssetCount, multiTeamTradeCount, totalTransactions }) {
+  if (!rosterCount) return 1;
+  const tradeDensity = tradeCount / rosterCount;
+  const pairDensity = pairCount / Math.max(1, rosterCount);
+  const transactionDensity = totalTransactions / Math.max(1, rosterCount * 6);
+  return clamp(Math.round(
+    tradeDensity * 28
+      + pairDensity * 22
+      + movedAssetCount * 1.6
+      + multiTeamTradeCount * 8
+      + transactionDensity * 18
+  ), 1, 99);
+}
+
+function buildRecentTradeSummary(transaction) {
+  const participantIds = getTransactionParticipantIds(transaction);
+  const participantNames = participantIds.map(getRosterManagerName);
+  const movements = buildTradeMovements(transaction);
+  const byRecipient = new Map();
+  movements.forEach((movement) => {
+    if (!byRecipient.has(movement.toRosterId)) byRecipient.set(movement.toRosterId, []);
+    byRecipient.get(movement.toRosterId).push(movement);
+  });
+  const preview = participantIds
+    .map((rosterId) => {
+      const assets = byRecipient.get(rosterId) || [];
+      const names = assets.slice(0, 3).map((asset) => asset.name);
+      const suffix = assets.length > 3 ? ` +${assets.length - 3}` : "";
+      return `${getRosterManagerName(rosterId)} got ${names.length ? names.join(", ") + suffix : "value"}`;
+    })
+    .join(" | ");
+  const date = formatTransactionDate(transaction.status_updated || transaction.created);
+  return {
+    title: participantNames.join(" / "),
+    subtitle: `${date} • ${movements.length} asset${movements.length === 1 ? "" : "s"} moved`,
+    preview: preview || "Trade details unavailable from Sleeper payload.",
+  };
+}
+
+function formatTransactionDate(timestamp) {
+  const numeric = Number(timestamp);
+  if (!Number.isFinite(numeric) || numeric <= 0) return "Unknown date";
+  try {
+    return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(new Date(numeric));
+  } catch {
+    return "Unknown date";
+  }
+}
+
+function median(values) {
+  const sorted = values.filter(Number.isFinite).sort((a, b) => a - b);
+  if (sorted.length === 0) return 0;
+  const middle = Math.floor(sorted.length / 2);
+  if (sorted.length % 2) return sorted[middle];
+  return Math.round((sorted[middle - 1] + sorted[middle]) / 2);
+}
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 function renderPowerStat(label, value, detail) {
@@ -7408,6 +8571,7 @@ function applyValuationBundle(bundle, { rerender = true } = {}) {
   if (rerender) {
     renderPlayerSearch();
     renderPowerDashboard();
+    renderLeagueAnalyticsDashboard();
   }
 
   return {
