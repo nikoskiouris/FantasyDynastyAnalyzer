@@ -8,14 +8,59 @@
   </head>
   <body>
     <div class="page-shell">
+      <header class="command-bar" aria-label="Application status">
+        <div class="brand-lockup">
+          <span class="brand-mark" aria-hidden="true">FD</span>
+          <div>
+            <span class="chrome-kicker">Dynasty OS</span>
+            <strong>Trade War Room</strong>
+          </div>
+        </div>
+        <div class="chrome-pulse" aria-hidden="true">
+          <span></span>
+          Sleeper sync
+        </div>
+        <dl class="chrome-status-grid">
+          <div>
+            <dt>League</dt>
+            <dd id="chrome-league-label">Not loaded</dd>
+          </div>
+          <div>
+            <dt>Manager</dt>
+            <dd id="chrome-manager-label">Select team</dd>
+          </div>
+          <div>
+            <dt>Mode</dt>
+            <dd id="chrome-mode-label">Analytics</dd>
+          </div>
+        </dl>
+      </header>
+
       <main class="container">
         <header class="app-header">
-          <h1>Dynasty Trade Finder</h1>
-          <p class="hero-lede">Load a Sleeper league, pick your team, choose one trade path.</p>
+          <div class="hero-copy">
+            <span class="eyebrow">Fantasy Dynasty Analyzer</span>
+            <h1>Find the move before your league sees it.</h1>
+            <p class="hero-lede">Load a Sleeper league and turn rosters, picks, market activity, and lineup impact into a clear trade board.</p>
+            <div class="hero-proof-grid" aria-label="Analyzer capabilities">
+              <div>
+                <strong>Power</strong>
+                <span>Roster score and league rank</span>
+              </div>
+              <div>
+                <strong>Market</strong>
+                <span>Trade tempo and manager habits</span>
+              </div>
+              <div>
+                <strong>Deals</strong>
+                <span>Ranked ideas with lineup impact</span>
+              </div>
+            </div>
+          </div>
         </header>
 
         <div class="workflow-shell">
-          <section class="card stage-card stage-lead">
+          <section class="card stage-card stage-lead command-panel">
             <div class="section-heading">
               <div class="section-kicker">
                 <span class="step-badge">01</span>
@@ -98,15 +143,28 @@
                 <h2>Choose a trade path</h2>
                 <p class="section-copy">Pick the one thing you want the app to solve.</p>
               </div>
-              <div class="grid mode-grid">
-                <label>
-                  Trade path
-                  <select id="trade-mode-select">
-                    <option value="shop">Shop a player or pick I own</option>
-                    <option value="acquire">Target someone on another team</option>
-                    <option value="surprise">Surprise multi-team blockbuster</option>
-                  </select>
-                </label>
+              <label class="sr-only" for="trade-mode-select">Trade path</label>
+              <select id="trade-mode-select" class="sr-only">
+                <option value="shop">Shop a player or pick I own</option>
+                <option value="acquire">Target someone on another team</option>
+                <option value="surprise">Surprise multi-team blockbuster</option>
+              </select>
+              <div class="mode-card-grid" role="group" aria-label="Trade path">
+                <button class="mode-card active" type="button" data-trade-mode="shop" aria-pressed="true">
+                  <span>Shop</span>
+                  <strong>Float an asset</strong>
+                  <small>Move one of your players or picks and scan the league for smart returns.</small>
+                </button>
+                <button class="mode-card" type="button" data-trade-mode="acquire" aria-pressed="false">
+                  <span>Acquire</span>
+                  <strong>Go get your target</strong>
+                  <small>Choose another roster's asset and build credible offers from your team.</small>
+                </button>
+                <button class="mode-card" type="button" data-trade-mode="surprise" aria-pressed="false">
+                  <span>Blockbuster</span>
+                  <strong>Let the board open up</strong>
+                  <small>Generate a multi-team concept when a straight two-team trade is too small.</small>
+                </button>
               </div>
               <p id="trade-mode-help" class="muted small mode-note">Pick one of your players or picks and the app will search the league for returns.</p>
               <label id="player-search-label" for="player-search">Search players and picks on other rosters</label>

@@ -133,6 +133,9 @@ const el = {
   leagueStatus: document.querySelector("#league-status"),
   leagueStatusText: document.querySelector("#league-status-text"),
   leagueStatusLoader: document.querySelector("#league-status-loader"),
+  chromeLeagueLabel: document.querySelector("#chrome-league-label"),
+  chromeManagerLabel: document.querySelector("#chrome-manager-label"),
+  chromeModeLabel: document.querySelector("#chrome-mode-label"),
   identitySection: document.querySelector("#identity-section"),
   meSelect: document.querySelector("#me-select"),
   pageTabs: document.querySelector("#page-tabs"),
@@ -146,6 +149,7 @@ const el = {
   analyticsDashboard: document.querySelector("#analytics-dashboard"),
   playerSection: document.querySelector("#player-section"),
   tradeModeSelect: document.querySelector("#trade-mode-select"),
+  modeCards: document.querySelectorAll("[data-trade-mode]"),
   tradeModeHelp: document.querySelector("#trade-mode-help"),
   playerSearchLabel: document.querySelector("#player-search-label"),
   targetSearchShell: document.querySelector("#target-search-shell"),
@@ -180,6 +184,14 @@ el.tradeModeSelect?.addEventListener("change", () => {
   invalidateResults();
   syncTradeModeUi();
 });
+el.modeCards?.forEach((button) => {
+  button.addEventListener("click", () => {
+    if (!el.tradeModeSelect) return;
+    el.tradeModeSelect.value = button.dataset.tradeMode || "shop";
+    invalidateResults();
+    syncTradeModeUi();
+  });
+});
 el.clearTargetBtn?.addEventListener("click", clearTargetAsset);
 el.meSelect.addEventListener("change", () => {
   invalidateResults();
@@ -190,6 +202,7 @@ el.meSelect.addEventListener("change", () => {
   syncTradeModeUi();
   renderPowerDashboard();
   renderLeagueAnalyticsDashboard();
+  renderSessionSnapshot();
 });
 el.generateBtn.addEventListener("click", generateTradeIdeas);
 
@@ -226,6 +239,7 @@ function setActivePage(page) {
   el.traderTab?.classList.toggle("active", nextPage === "trader");
   el.analyticsTab?.setAttribute("aria-selected", String(nextPage === "analytics"));
   el.traderTab?.setAttribute("aria-selected", String(nextPage === "trader"));
+  renderSessionSnapshot();
 
   if (nextPage === "analytics") {
     renderPowerDashboard();
@@ -327,7 +341,23 @@ function syncGenerateState() {
 }
 
 function renderSessionSnapshot() {
-  // Session snapshot UI was intentionally removed in the simplified layout.
+  document.body.classList.toggle("league-loaded", Boolean(state.leagueId));
+  if (el.chromeLeagueLabel) {
+    el.chromeLeagueLabel.textContent = state.leagueName || "Not loaded";
+  }
+  if (el.chromeManagerLabel) {
+    el.chromeManagerLabel.textContent = getMyRoster()?.manager?.displayName || "Select team";
+  }
+  if (el.chromeModeLabel) {
+    const pageLabel = state.activePage === "trader" ? "Trade Lab" : "Analytics";
+    const modeLabelByMode = {
+      acquire: "Acquire",
+      shop: "Shop",
+      surprise: "Blockbuster",
+    };
+    const modeLabel = state.activePage === "trader" ? modeLabelByMode[getTradeMode()] || "Trade Lab" : pageLabel;
+    el.chromeModeLabel.textContent = modeLabel;
+  }
 }
 
 function syncTradeModeUi() {
@@ -349,6 +379,12 @@ function syncTradeModeUi() {
     },
   };
 
+  el.modeCards?.forEach((button) => {
+    const isActive = button.dataset.tradeMode === mode;
+    button.classList.toggle("active", isActive);
+    button.setAttribute("aria-pressed", String(isActive));
+  });
+
   el.playerSearchLabel?.classList.toggle("hidden", !searchEnabled);
   el.targetSearchShell?.classList.toggle("hidden", !searchEnabled);
   el.playerResults?.classList.toggle("hidden", !searchEnabled);
@@ -367,6 +403,7 @@ function syncTradeModeUi() {
     renderPlayerSearch();
   }
   syncGenerateState();
+  renderSessionSnapshot();
 }
 
 async function loadLeague() {
