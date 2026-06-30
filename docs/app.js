@@ -68,6 +68,9 @@ const CUSTOM_MULTI_TEAM_SECONDARY_ANCHOR_MIN_SHARE = 0.16;
 const CUSTOM_MULTI_TEAM_SECONDARY_ANCHOR_MAX_SHARE = 0.78;
 const CUSTOM_MULTI_TEAM_ORDER_LIMIT = 12;
 const CUSTOM_MULTI_TEAM_PLAN_LIMIT = 18;
+const AUTOSELECT_MANAGER_BY_LEAGUE = {
+  "1315165104303513600": "NikoSkiouris",
+};
 
 const state = {
   leagueId: "",
@@ -107,6 +110,8 @@ const state = {
 const el = {
   leagueId: document.querySelector("#league-id"),
   loadLeagueBtn: document.querySelector("#load-league-btn"),
+  copyLeagueIdBtn: document.querySelector("#copy-league-id-btn"),
+  copyLeagueIdFeedback: document.querySelector("#copy-league-id-feedback"),
   leagueStatus: document.querySelector("#league-status"),
   leagueStatusText: document.querySelector("#league-status-text"),
   leagueStatusLoader: document.querySelector("#league-status-loader"),
@@ -137,6 +142,7 @@ el.leagueId?.addEventListener("keydown", (event) => {
     loadLeague();
   }
 });
+el.copyLeagueIdBtn?.addEventListener("click", copyHelperLeagueId);
 el.playerSearch.addEventListener("input", () => {
   invalidateResults();
   renderPlayerSearch();
@@ -161,6 +167,7 @@ syncTradeModeUi();
 
 let leagueLoadAnimationTimer = null;
 let leagueLoadStartedAt = 0;
+let copyFeedbackTimer = null;
 
 function invalidateResults() {
   el.resultsSection.classList.add("hidden");
@@ -373,6 +380,49 @@ async function loadLeague() {
   } finally {
     stopLeagueLoadingUi();
   }
+}
+
+async function copyHelperLeagueId() {
+  const leagueId = el.copyLeagueIdBtn?.textContent?.trim();
+  if (!leagueId) return;
+
+  let copied = false;
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(leagueId);
+      copied = true;
+    }
+  } catch {
+    copied = false;
+  }
+
+  if (!copied) {
+    try {
+      const tempInput = document.createElement("input");
+      tempInput.value = leagueId;
+      tempInput.style.position = "absolute";
+      tempInput.style.left = "-9999px";
+      document.body.appendChild(tempInput);
+      tempInput.select();
+      copied = document.execCommand("copy");
+      document.body.removeChild(tempInput);
+    } catch {
+      copied = false;
+    }
+  }
+
+  showCopyFeedback(copied ? "Copied!" : "Copy failed");
+}
+
+function showCopyFeedback(text) {
+  if (!el.copyLeagueIdFeedback) return;
+  el.copyLeagueIdFeedback.textContent = text;
+  el.copyLeagueIdFeedback.classList.remove("hidden");
+
+  clearTimeout(copyFeedbackTimer);
+  copyFeedbackTimer = setTimeout(() => {
+    el.copyLeagueIdFeedback.classList.add("hidden");
+  }, 1500);
 }
 
 async function loadLeagueCoreData(leagueId) {
@@ -606,9 +656,16 @@ function hydrateManagerSelector() {
       el.meSelect.appendChild(option);
     });
 
+  const preferredManager = AUTOSELECT_MANAGER_BY_LEAGUE[state.leagueId];
+  const preferredRoster = preferredManager
+    ? state.normalizedRosters.find((roster) => roster.manager.displayName === preferredManager)
+    : null;
   const preservedRoster = state.normalizedRosters.find((roster) => roster.rosterId === selectedRosterId);
 
-  if (preservedRoster) {
+  if (!preservedRoster && preferredRoster) {
+    state.meRosterId = preferredRoster.rosterId;
+    el.meSelect.value = String(preferredRoster.rosterId);
+  } else if (preservedRoster) {
     state.meRosterId = preservedRoster.rosterId;
     el.meSelect.value = String(preservedRoster.rosterId);
   } else if (state.normalizedRosters.length > 0) {
