@@ -3,6 +3,7 @@ const SAMPLE_VALUES_PATH = "./data/ktc_values_sample.csv";
 const PLAYERS_CACHE_KEY = "fda_players_nfl_cache_v1";
 const PLAYERS_CACHE_TTL_MS = 1000 * 60 * 60 * 24;
 const DEFAULT_FAIRNESS_PCT = 20;
+const DEFAULT_MAX_RESULTS = 3;
 const OUTGOING_POOL_LIMIT = 18;
 const DEFAULT_MAX_OUTGOING_PACKAGE_SIZE = 5;
 const ELITE_MAX_OUTGOING_PACKAGE_SIZE = 6;
@@ -20,12 +21,19 @@ const MAX_TARGET_ANCHOR_SHARE = 0.64;
 const ELITE_FRAGMENTATION_TAX_PER_EXTRA_ASSET = 180;
 const STAR_FRAGMENTATION_TAX_PER_EXTRA_ASSET = 120;
 const BASE_FRAGMENTATION_TAX_PER_EXTRA_ASSET = 70;
+const ELITE_VALUE_PREMIUM_TIERS = [
+  { floor: 9000, multiplier: 1.32 },
+  { floor: 8000, multiplier: 1.27 },
+  { floor: 7000, multiplier: 1.21 },
+  { floor: 6000, multiplier: 1.15 },
+  { floor: 5000, multiplier: 1.09 },
+];
 const PACKAGE_DIVERSITY_OVERLAP_RATIO = 0.55;
 const PACKAGE_DIVERSITY_VALUE_OVERLAP_RATIO = 0.72;
 const KTC_RAW_BASE = 0.10;
-const KTC_RAW_ELITE_WEIGHT = 0.04;
-const KTC_RAW_TRADE_WEIGHT = 0.09;
-const KTC_RAW_DEPTH_WEIGHT = 0.24;
+const KTC_RAW_ELITE_WEIGHT = 0.08;
+const KTC_RAW_TRADE_WEIGHT = 0.11;
+const KTC_RAW_DEPTH_WEIGHT = 0.18;
 const KTC_GLOBAL_MAX_FALLBACK = 9999;
 const DEFAULT_MULTI_TEAM_COUNT = 3;
 const MULTI_TEAM_MAX_EXTRAS_PER_SENDER = 3;
@@ -60,9 +68,6 @@ const CUSTOM_MULTI_TEAM_SECONDARY_ANCHOR_MIN_SHARE = 0.16;
 const CUSTOM_MULTI_TEAM_SECONDARY_ANCHOR_MAX_SHARE = 0.78;
 const CUSTOM_MULTI_TEAM_ORDER_LIMIT = 12;
 const CUSTOM_MULTI_TEAM_PLAN_LIMIT = 18;
-const AUTOSELECT_MANAGER_BY_LEAGUE = {
-  "1315165104303513600": "NikoSkiouris",
-};
 
 const state = {
   leagueId: "",
@@ -102,8 +107,6 @@ const state = {
 const el = {
   leagueId: document.querySelector("#league-id"),
   loadLeagueBtn: document.querySelector("#load-league-btn"),
-  copyLeagueIdBtn: document.querySelector("#copy-league-id-btn"),
-  copyLeagueIdFeedback: document.querySelector("#copy-league-id-feedback"),
   leagueStatus: document.querySelector("#league-status"),
   leagueStatusText: document.querySelector("#league-status-text"),
   leagueStatusLoader: document.querySelector("#league-status-loader"),
@@ -111,9 +114,6 @@ const el = {
   meSelect: document.querySelector("#me-select"),
   playerSection: document.querySelector("#player-section"),
   tradeModeSelect: document.querySelector("#trade-mode-select"),
-  tradeTierSelect: document.querySelector("#trade-tier-select"),
-  customTeamCountWrap: document.querySelector("#custom-team-count-wrap"),
-  customTeamCountSelect: document.querySelector("#custom-team-count-select"),
   tradeModeHelp: document.querySelector("#trade-mode-help"),
   playerSearchLabel: document.querySelector("#player-search-label"),
   targetSearchShell: document.querySelector("#target-search-shell"),
@@ -122,28 +122,9 @@ const el = {
   clearTargetBtn: document.querySelector("#clear-target-btn"),
   playerSearch: document.querySelector("#player-search"),
   playerResults: document.querySelector("#player-results"),
-  multiCustomPanel: document.querySelector("#multi-custom-panel"),
-  multiCustomTeamSlots: document.querySelector("#multi-custom-team-slots"),
-  builderSection: document.querySelector("#builder-section"),
-  includeAssetsToggle: document.querySelector("#include-assets-toggle"),
-  includeAssetsPanel: document.querySelector("#include-assets-panel"),
-  includeAssetsDetails: document.querySelector("#include-assets-details"),
-  includeAssetsSummaryLabel: document.querySelector("#include-assets-summary-label"),
-  includeAssetSearch: document.querySelector("#include-asset-search"),
-  myAssetResults: document.querySelector("#my-asset-results"),
-  selectedAssetsSummary: document.querySelector("#selected-assets-summary"),
-  selectedAssetsList: document.querySelector("#selected-assets-list"),
-  excludeAssetsToggle: document.querySelector("#exclude-assets-toggle"),
-  excludeAssetsPanel: document.querySelector("#exclude-assets-panel"),
-  excludeAssetsDetails: document.querySelector("#exclude-assets-details"),
-  excludeAssetsSummaryLabel: document.querySelector("#exclude-assets-summary-label"),
-  excludeAssetSearch: document.querySelector("#exclude-asset-search"),
-  excludeAssetResults: document.querySelector("#exclude-asset-results"),
-  excludedAssetsSummary: document.querySelector("#excluded-assets-summary"),
-  excludedAssetsList: document.querySelector("#excluded-assets-list"),
   settingsSection: document.querySelector("#settings-section"),
-  maxResultsInput: document.querySelector("#max-results-input"),
   generateBtn: document.querySelector("#generate-btn"),
+  generateHelp: document.querySelector("#generate-help"),
   resultsSection: document.querySelector("#results-section"),
   resultsSubtitle: document.querySelector("#results-subtitle"),
   resultsList: document.querySelector("#results-list"),
@@ -156,7 +137,6 @@ el.leagueId?.addEventListener("keydown", (event) => {
     loadLeague();
   }
 });
-el.copyLeagueIdBtn?.addEventListener("click", copyHelperLeagueId);
 el.playerSearch.addEventListener("input", () => {
   invalidateResults();
   renderPlayerSearch();
@@ -165,37 +145,13 @@ el.tradeModeSelect?.addEventListener("change", () => {
   invalidateResults();
   syncTradeModeUi();
 });
-el.tradeTierSelect?.addEventListener("change", invalidateResults);
-el.customTeamCountSelect?.addEventListener("change", () => {
-  invalidateResults();
-  syncTradeModeUi();
-});
 el.clearTargetBtn?.addEventListener("click", clearTargetAsset);
-el.includeAssetSearch?.addEventListener("input", () => {
-  invalidateResults();
-  renderOutgoingAssetSearch();
-});
-el.excludeAssetSearch?.addEventListener("input", () => {
-  invalidateResults();
-  renderOutgoingAssetSearch();
-});
-el.includeAssetsToggle?.addEventListener("change", handleIncludeToggleChange);
-el.excludeAssetsToggle?.addEventListener("change", handleExcludeToggleChange);
-[
-  el.maxResultsInput,
-].forEach((input) => {
-  input?.addEventListener("change", () => {
-    invalidateResults();
-    renderOutgoingAssetSearch();
-  });
-});
 el.meSelect.addEventListener("change", () => {
   invalidateResults();
   state.meRosterId = Number(el.meSelect.value);
   renderPlayerSearch();
   pruneSelectedOutgoingAssets();
   pruneExcludedOutgoingAssets();
-  renderOutgoingAssetSearch();
   syncTradeModeUi();
 });
 el.generateBtn.addEventListener("click", generateTradeIdeas);
@@ -205,18 +161,18 @@ syncTradeModeUi();
 
 let leagueLoadAnimationTimer = null;
 let leagueLoadStartedAt = 0;
-let copyFeedbackTimer = null;
 
 function invalidateResults() {
   el.resultsSection.classList.add("hidden");
+  syncGenerateState();
 }
 
 function getTradeMode() {
-  return el.tradeModeSelect?.value || "acquire";
+  return el.tradeModeSelect?.value || "shop";
 }
 
 function getTradeTier() {
-  return el.tradeTierSelect?.value || "all";
+  return "all";
 }
 
 function getCurrentPrimaryAsset() {
@@ -240,6 +196,7 @@ function clearTargetAsset() {
   }
   if (el.playerSearch) el.playerSearch.value = "";
   renderPlayerSearch();
+  syncGenerateState();
 }
 
 function syncTargetSearchUi() {
@@ -263,89 +220,67 @@ function syncTargetSearchUi() {
   if (el.playerSearch) {
     el.playerSearch.placeholder = hasTarget ? "" : (placeholderByMode[mode] || "Search player or pick");
   }
+  syncGenerateState();
+}
+
+function isReadyToGenerate() {
+  if (!state.meRosterId) return false;
+  const mode = getTradeMode();
+  if (mode === "surprise") return true;
+  if (mode === "shop") return Boolean(state.shopAsset);
+  if (mode === "acquire") return Boolean(state.targetAsset);
+  return false;
+}
+
+function getGenerateHelpText() {
+  if (!state.meRosterId) return "Load a league and choose your team first.";
+  const mode = getTradeMode();
+  if (mode === "surprise") return "Ready. The app will find a three-team blockbuster.";
+  if (mode === "shop") {
+    return state.shopAsset
+      ? `Ready to shop ${state.shopAsset.name}.`
+      : "Choose one of your players or picks to shop.";
+  }
+  if (mode === "acquire") {
+    return state.targetAsset
+      ? `Ready to build offers for ${state.targetAsset.name}.`
+      : "Choose the player or pick you want from another team.";
+  }
+  return "Choose a trade path first.";
+}
+
+function syncGenerateState() {
+  if (el.generateBtn && !el.generateBtn.classList.contains("loading")) {
+    el.generateBtn.disabled = !isReadyToGenerate();
+  }
+  if (el.generateHelp) {
+    el.generateHelp.textContent = getGenerateHelpText();
+  }
 }
 
 function renderSessionSnapshot() {
   // Session snapshot UI was intentionally removed in the simplified layout.
 }
 
-function buildCountSelectOptions(selectEl, minCount, maxCount, selectedValue, labelBuilder) {
-  if (!selectEl) return;
-  selectEl.innerHTML = "";
-  for (let value = minCount; value <= maxCount; value += 1) {
-    const option = document.createElement("option");
-    option.value = String(value);
-    option.textContent = labelBuilder(value);
-    selectEl.appendChild(option);
-  }
-  selectEl.value = String(clamp(Number(selectedValue) || minCount, minCount, maxCount));
-}
-
-function hydrateMultiTeamControls() {
-  const totalTeams = state.normalizedRosters.length;
-  if (totalTeams < DEFAULT_MULTI_TEAM_COUNT) return;
-
-  buildCountSelectOptions(
-    el.customTeamCountSelect,
-    2,
-    Math.max(2, totalTeams - 1),
-    el.customTeamCountSelect?.value || 2,
-    (value) => `${value} other team${value === 1 ? "" : "s"}`
-  );
-  trimCustomParticipantState();
-}
-
-function trimCustomParticipantState() {
-  const meRosterId = Number(el.meSelect?.value || state.meRosterId || 0);
-  const requestedCount = clamp(
-    Number(el.customTeamCountSelect?.value || state.customParticipantRosterIds.length || 2),
-    2,
-    Math.max(2, state.normalizedRosters.length - 1)
-  );
-  const availableRosterIds = new Set(
-    state.normalizedRosters
-      .map((roster) => roster.rosterId)
-      .filter((rosterId) => rosterId !== meRosterId)
-  );
-  const nextRosterIds = [];
-  for (const rosterId of state.customParticipantRosterIds) {
-    if (nextRosterIds.length >= requestedCount) break;
-    if (!availableRosterIds.has(rosterId) || nextRosterIds.includes(rosterId)) continue;
-    nextRosterIds.push(rosterId);
-  }
-  while (nextRosterIds.length < requestedCount) {
-    nextRosterIds.push(null);
-  }
-  state.customParticipantRosterIds = nextRosterIds;
-}
-
 function syncTradeModeUi() {
-  hydrateMultiTeamControls();
-  trimCustomParticipantState();
-
   const mode = getTradeMode();
-  const searchEnabled = mode !== "multi-custom";
-  const showCustomBuilder = mode === "multi-custom";
-  const showTierSelector = mode !== "multi-custom";
+  const searchEnabled = mode !== "surprise";
   const selectedAsset = getCurrentPrimaryAsset();
   const copyByMode = {
     acquire: {
-      help: "Pick a player or pick you want from another team. The generator will build level-up, even, or break-down offers around that target.",
-      label: "Which player or pick do you want?",
+      help: "Search another roster for the player or pick you want.",
+      label: "Who do you want?",
     },
     shop: {
-      help: "Pick one of your own assets and the generator will search the league for strong return packages.",
-      label: "Which player or pick do you want to shop?",
+      help: "Pick one player or pick from your roster. The app will shop it around the league.",
+      label: "Who are you willing to move?",
     },
-    "multi-custom": {
-      help: "Pick the owners involved, then click generate. The solver will build blockbuster multi-team structures across those teams automatically.",
-      label: "Multi-team builder",
+    surprise: {
+      help: "No player search needed. The app will pick teams and build a multi-team blockbuster.",
+      label: "Surprise blockbuster",
     },
   };
 
-  el.customTeamCountWrap?.classList.toggle("hidden", !showCustomBuilder);
-  el.multiCustomPanel?.classList.toggle("hidden", !showCustomBuilder);
-  el.tradeTierSelect?.closest("label")?.classList.toggle("hidden", !showTierSelector);
   el.playerSearchLabel?.classList.toggle("hidden", !searchEnabled);
   el.targetSearchShell?.classList.toggle("hidden", !searchEnabled);
   el.playerResults?.classList.toggle("hidden", !searchEnabled);
@@ -363,86 +298,7 @@ function syncTradeModeUi() {
     }
     renderPlayerSearch();
   }
-
-  renderCustomMultiTeamBuilder();
-}
-
-function renderCustomMultiTeamBuilder() {
-  if (!el.multiCustomPanel || !el.multiCustomTeamSlots) return;
-  if (getTradeMode() !== "multi-custom") return;
-
-  renderCustomParticipantTeamSlots();
-}
-
-function renderCustomParticipantTeamSlots() {
-  const meRoster = getMyRoster();
-  if (!el.multiCustomTeamSlots) return;
-  el.multiCustomTeamSlots.innerHTML = `<p class="muted small builder-note">1. Choose the other owners who should be part of this trade.</p>`;
-
-  if (!meRoster) {
-    el.multiCustomTeamSlots.innerHTML = `<p class="muted small">Choose your team first.</p>`;
-    return;
-  }
-
-  const requestedCount = clamp(
-    Number(el.customTeamCountSelect?.value || state.customParticipantRosterIds.length || 2),
-    2,
-    Math.max(2, state.normalizedRosters.length - 1)
-  );
-  trimCustomParticipantState();
-
-  for (let index = 0; index < requestedCount; index += 1) {
-    const selectedRosterId = state.customParticipantRosterIds[index];
-    const selectedSet = new Set(
-      state.customParticipantRosterIds
-        .filter((rosterId, rosterIndex) => rosterIndex !== index && Number.isFinite(rosterId))
-    );
-    const card = document.createElement("div");
-    card.className = "multi-team-slot-card";
-
-    const label = document.createElement("label");
-    label.innerHTML = `
-      Other team ${index + 1}
-      <select data-team-slot-index="${index}"></select>
-    `;
-    const select = label.querySelector("select");
-
-    const blank = document.createElement("option");
-    blank.value = "";
-    blank.textContent = "Choose an owner";
-    select.appendChild(blank);
-
-    state.normalizedRosters
-      .filter((roster) => roster.rosterId !== meRoster.rosterId)
-      .slice()
-      .sort((a, b) => a.manager.displayName.localeCompare(b.manager.displayName))
-      .forEach((roster) => {
-        if (selectedSet.has(roster.rosterId)) return;
-        const option = document.createElement("option");
-        option.value = String(roster.rosterId);
-        option.textContent = roster.manager.displayName;
-        select.appendChild(option);
-      });
-
-    if (Number.isFinite(selectedRosterId)) {
-      select.value = String(selectedRosterId);
-    }
-    select.addEventListener("change", (event) => handleCustomParticipantTeamChange(index, event.target.value));
-    card.appendChild(label);
-    el.multiCustomTeamSlots.appendChild(card);
-  }
-
-  const note = document.createElement("p");
-  note.className = "muted small builder-note";
-  note.textContent = "2. Click generate and the solver will suggest blockbuster trade ideas across the teams you selected.";
-  el.multiCustomTeamSlots.appendChild(note);
-}
-
-function handleCustomParticipantTeamChange(index, rosterIdValue) {
-  const rosterId = rosterIdValue ? Number(rosterIdValue) : null;
-  state.customParticipantRosterIds[index] = rosterId;
-  invalidateResults();
-  renderCustomMultiTeamBuilder();
+  syncGenerateState();
 }
 
 async function loadLeague() {
@@ -460,13 +316,7 @@ async function loadLeague() {
   state.customParticipantRosterIds = [];
   state.tradedPicks = [];
   state.currentDraftContext = null;
-  if (el.includeAssetsToggle) el.includeAssetsToggle.checked = false;
-  if (el.excludeAssetsToggle) el.excludeAssetsToggle.checked = false;
-  if (el.includeAssetSearch) el.includeAssetSearch.value = "";
-  if (el.excludeAssetSearch) el.excludeAssetSearch.value = "";
   if (el.playerSearch) el.playerSearch.value = "";
-  if (el.includeAssetsDetails) el.includeAssetsDetails.open = false;
-  if (el.excludeAssetsDetails) el.excludeAssetsDetails.open = false;
   renderSessionSnapshot();
   el.resultsList.innerHTML = "";
   el.resultsSection.classList.add("hidden");
@@ -490,13 +340,11 @@ async function loadLeague() {
     state.normalizedRosters = normalizeRosters(league, rosters, users, state.players, previousContext, tradedPicks, currentDraftContext);
 
     hydrateManagerSelector();
-    hydrateMultiTeamControls();
     syncTradeModeUi();
     renderSessionSnapshot();
     el.identitySection.classList.remove("hidden");
     el.playerSection.classList.remove("hidden");
-    el.builderSection.classList.remove("hidden");
-    el.settingsSection.classList.remove("hidden");
+    el.settingsSection?.classList.remove("hidden");
     setStatus(`Loaded ${state.leagueName}. Player names are still syncing...`, { loading: true });
     primeValuationData();
 
@@ -510,15 +358,11 @@ async function loadLeague() {
           rosters: state.previousRosters,
         }, state.tradedPicks, state.currentDraftContext);
         hydrateManagerSelector();
-        hydrateMultiTeamControls();
         syncTradeModeUi();
-        renderOutgoingAssetSearch();
         setStatus(`Loaded ${state.leagueName}. Choose your team to continue.`, { ok: true });
       })
       .catch((err) => {
-        hydrateMultiTeamControls();
         syncTradeModeUi();
-        renderOutgoingAssetSearch();
         setStatus(
           `Loaded ${state.leagueName}, but could not pull full NFL names (${err.message}). You can still use the app.`,
           { ok: true }
@@ -529,49 +373,6 @@ async function loadLeague() {
   } finally {
     stopLeagueLoadingUi();
   }
-}
-
-async function copyHelperLeagueId() {
-  const leagueId = el.copyLeagueIdBtn?.textContent?.trim();
-  if (!leagueId) return;
-
-  let copied = false;
-  try {
-    if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(leagueId);
-      copied = true;
-    }
-  } catch {
-    copied = false;
-  }
-
-  if (!copied) {
-    try {
-      const tempInput = document.createElement("input");
-      tempInput.value = leagueId;
-      tempInput.style.position = "absolute";
-      tempInput.style.left = "-9999px";
-      document.body.appendChild(tempInput);
-      tempInput.select();
-      copied = document.execCommand("copy");
-      document.body.removeChild(tempInput);
-    } catch {
-      copied = false;
-    }
-  }
-
-  showCopyFeedback(copied ? "Copied!" : "Copy failed");
-}
-
-function showCopyFeedback(text) {
-  if (!el.copyLeagueIdFeedback) return;
-  el.copyLeagueIdFeedback.textContent = text;
-  el.copyLeagueIdFeedback.classList.remove("hidden");
-
-  clearTimeout(copyFeedbackTimer);
-  copyFeedbackTimer = setTimeout(() => {
-    el.copyLeagueIdFeedback.classList.add("hidden");
-  }, 1500);
 }
 
 async function loadLeagueCoreData(leagueId) {
@@ -805,16 +606,9 @@ function hydrateManagerSelector() {
       el.meSelect.appendChild(option);
     });
 
-  const preferredManager = AUTOSELECT_MANAGER_BY_LEAGUE[state.leagueId];
-  const preferredRoster = preferredManager
-    ? state.normalizedRosters.find((roster) => roster.manager.displayName === preferredManager)
-    : null;
   const preservedRoster = state.normalizedRosters.find((roster) => roster.rosterId === selectedRosterId);
 
-  if (!preservedRoster && preferredRoster) {
-    state.meRosterId = preferredRoster.rosterId;
-    el.meSelect.value = String(preferredRoster.rosterId);
-  } else if (preservedRoster) {
+  if (preservedRoster) {
     state.meRosterId = preservedRoster.rosterId;
     el.meSelect.value = String(preservedRoster.rosterId);
   } else if (state.normalizedRosters.length > 0) {
@@ -823,38 +617,8 @@ function hydrateManagerSelector() {
   }
   pruneSelectedOutgoingAssets();
   pruneExcludedOutgoingAssets();
-  hydrateMultiTeamControls();
   renderPlayerSearch();
-  renderOutgoingAssetSearch();
-  renderCustomMultiTeamBuilder();
   renderSessionSnapshot();
-}
-
-function updateAssetTypeFilter(scope, key, checked) {
-  invalidateResults();
-  const filters = scope === "target" ? state.targetFilters : state.outgoingFilters;
-  const otherKey = key === "players" ? "picks" : "players";
-
-  if (!checked && !filters[otherKey]) {
-    filters[key] = true;
-  } else {
-    filters[key] = checked;
-  }
-
-  syncAssetTypeToggles();
-  if (scope === "target") {
-    renderPlayerSearch();
-    return;
-  }
-  pruneSelectedOutgoingAssetsByFilters();
-  renderOutgoingAssetSearch();
-}
-
-function syncAssetTypeToggles() {
-  if (el.targetPlayersToggle) el.targetPlayersToggle.checked = state.targetFilters.players;
-  if (el.targetPicksToggle) el.targetPicksToggle.checked = state.targetFilters.picks;
-  if (el.givePlayersToggle) el.givePlayersToggle.checked = state.outgoingFilters.players;
-  if (el.givePicksToggle) el.givePicksToggle.checked = state.outgoingFilters.picks;
 }
 
 function getMyRoster() {
@@ -906,10 +670,6 @@ function renderPlayerSearch() {
   const meRosterId = Number(el.meSelect.value || state.meRosterId);
   state.meRosterId = meRosterId;
   const mode = getTradeMode();
-  if (mode === "multi-custom") {
-    syncTargetSearchUi();
-    return;
-  }
 
   const query = el.playerSearch.value.trim().toLowerCase();
   const selectedAsset = getCurrentPrimaryAsset();
@@ -980,6 +740,7 @@ function renderPlayerSearch() {
       el.playerSearch.value = "";
       el.resultsSection.classList.add("hidden");
       renderPlayerSearch();
+      syncGenerateState();
     });
     el.playerResults.appendChild(row);
   }
@@ -1011,310 +772,6 @@ function pruneExcludedOutgoingAssets() {
   state.excludedOutgoingAssetIds = new Set(
     [...state.excludedOutgoingAssetIds].filter((assetId) => validAssetIds.has(assetId))
   );
-}
-
-function pruneSelectedOutgoingAssetsByFilters() {
-  const meRoster = getMyRoster();
-  if (!meRoster) return;
-
-  const allowedAssetIds = new Set(
-    meRoster.assets
-      .filter((asset) => assetTypeAllowed(asset, state.outgoingFilters))
-      .map((asset) => asset.assetId)
-  );
-  state.selectedOutgoingAssetIds = new Set(
-    [...state.selectedOutgoingAssetIds].filter((assetId) => allowedAssetIds.has(assetId))
-  );
-}
-
-function handleIncludeToggleChange() {
-  invalidateResults();
-  if (!el.includeAssetsToggle?.checked) {
-    state.selectedOutgoingAssetIds.clear();
-    if (el.includeAssetSearch) el.includeAssetSearch.value = "";
-    if (el.includeAssetsDetails) el.includeAssetsDetails.open = false;
-  }
-  renderOutgoingAssetSearch();
-}
-
-function handleExcludeToggleChange() {
-  invalidateResults();
-  if (!el.excludeAssetsToggle?.checked) {
-    state.excludedOutgoingAssetIds.clear();
-    if (el.excludeAssetSearch) el.excludeAssetSearch.value = "";
-    if (el.excludeAssetsDetails) el.excludeAssetsDetails.open = false;
-  }
-  renderOutgoingAssetSearch();
-}
-
-function addExcludedOutgoingAsset(assetId) {
-  invalidateResults();
-  state.selectedOutgoingAssetIds.delete(assetId);
-  state.excludedOutgoingAssetIds.add(assetId);
-  renderOutgoingAssetSearch();
-}
-
-function removeExcludedOutgoingAsset(assetId) {
-  invalidateResults();
-  state.excludedOutgoingAssetIds.delete(assetId);
-  renderOutgoingAssetSearch();
-}
-
-function clearExcludedOutgoingAssets() {
-  invalidateResults();
-  state.excludedOutgoingAssetIds.clear();
-  renderOutgoingAssetSearch();
-}
-
-function getVisibleOutgoingAssets() {
-  const meRoster = getMyRoster();
-  if (!meRoster) return [];
-
-  const query = el.includeAssetSearch?.value.trim().toLowerCase() || "";
-  return meRoster.assets
-    .filter((asset) => assetTypeAllowed(asset, state.outgoingFilters))
-    .filter((asset) => !state.excludedOutgoingAssetIds.has(asset.assetId))
-    .filter((asset) => assetMatchesQuery(asset, query))
-    .sort((a, b) => sortAssetPickerOptions(a, b, state.values))
-    .slice(0, 150);
-}
-
-function getVisibleExcludedOutgoingAssets() {
-  const meRoster = getMyRoster();
-  if (!meRoster) return [];
-
-  const query = el.excludeAssetSearch?.value.trim().toLowerCase() || "";
-  return meRoster.assets
-    .filter((asset) => assetTypeAllowed(asset, state.outgoingFilters))
-    .filter((asset) => assetMatchesQuery(asset, query))
-    .sort((a, b) => sortAssetPickerOptions(a, b, state.values))
-    .slice(0, 150);
-}
-
-function clearSelectedOutgoingAssets() {
-  invalidateResults();
-  state.selectedOutgoingAssetIds.clear();
-  renderOutgoingAssetSearch();
-}
-
-function toggleOutgoingAsset(assetId) {
-  invalidateResults();
-  state.excludedOutgoingAssetIds.delete(assetId);
-  if (state.selectedOutgoingAssetIds.has(assetId)) {
-    state.selectedOutgoingAssetIds.delete(assetId);
-  } else {
-    state.selectedOutgoingAssetIds.add(assetId);
-  }
-  renderOutgoingAssetSearch();
-}
-
-function toggleExcludedOutgoingAsset(assetId) {
-  invalidateResults();
-  state.selectedOutgoingAssetIds.delete(assetId);
-  if (state.excludedOutgoingAssetIds.has(assetId)) {
-    state.excludedOutgoingAssetIds.delete(assetId);
-  } else {
-    state.excludedOutgoingAssetIds.add(assetId);
-  }
-  renderOutgoingAssetSearch();
-}
-
-function renderOutgoingAssetSearch() {
-  if (!el.myAssetResults || !el.excludeAssetResults) return;
-  const meRoster = getMyRoster();
-  syncBuilderPanels();
-  renderSelectedOutgoingAssets(meRoster);
-  renderExcludedOutgoingAssets(meRoster);
-  updateSelectedAssetsSummary();
-  updateExcludedAssetsSummary();
-
-  if (!meRoster) {
-    el.myAssetResults.innerHTML = `<div class="player-item muted">Choose your team first.</div>`;
-    el.excludeAssetResults.innerHTML = `<div class="player-item muted">Choose your team first.</div>`;
-    return;
-  }
-
-  renderIncludedAssetPicker();
-  renderExcludedAssetPicker();
-}
-
-function syncBuilderPanels() {
-  const includeEnabled = Boolean(el.includeAssetsToggle?.checked);
-  const excludeEnabled = Boolean(el.excludeAssetsToggle?.checked);
-
-  el.includeAssetsPanel?.classList.toggle("hidden", !includeEnabled);
-  el.excludeAssetsPanel?.classList.toggle("hidden", !excludeEnabled);
-}
-
-function renderIncludedAssetPicker() {
-  const visibleAssets = getVisibleOutgoingAssets();
-  el.myAssetResults.innerHTML = "";
-
-  if (visibleAssets.length === 0) {
-    const emptyState = state.excludedOutgoingAssetIds.size > 0
-      ? "No matching assets found outside your excluded list."
-      : "No matching assets found on your roster.";
-    el.myAssetResults.innerHTML = `<div class="player-item muted">${emptyState}</div>`;
-    return;
-  }
-
-  for (const asset of visibleAssets) {
-    const row = document.createElement("div");
-    const selected = state.selectedOutgoingAssetIds.has(asset.assetId);
-    row.className = `player-item ${selected ? "selected" : ""}`;
-    row.innerHTML = buildAssetPickerMarkup(asset, {
-      values: state.values,
-      contextLabel: selected ? "Included" : "",
-    });
-    row.addEventListener("click", () => toggleOutgoingAsset(asset.assetId));
-    el.myAssetResults.appendChild(row);
-  }
-}
-
-function renderExcludedAssetPicker() {
-  const visibleAssets = getVisibleExcludedOutgoingAssets();
-  el.excludeAssetResults.innerHTML = "";
-
-  if (visibleAssets.length === 0) {
-    el.excludeAssetResults.innerHTML = `<div class="player-item muted">No matching assets found on your roster.</div>`;
-    return;
-  }
-
-  for (const asset of visibleAssets) {
-    const row = document.createElement("div");
-    const selected = state.excludedOutgoingAssetIds.has(asset.assetId);
-    row.className = `player-item ${selected ? "selected" : ""}`;
-    row.innerHTML = buildAssetPickerMarkup(asset, {
-      values: state.values,
-      contextLabel: selected ? "Excluded" : "",
-    });
-    row.addEventListener("click", () => toggleExcludedOutgoingAsset(asset.assetId));
-    el.excludeAssetResults.appendChild(row);
-  }
-}
-
-function renderSelectedOutgoingAssets(meRoster = getMyRoster()) {
-  if (!el.selectedAssetsList) return;
-
-  el.selectedAssetsList.innerHTML = "";
-
-  if (!meRoster) {
-    el.selectedAssetsList.innerHTML = `<p class="muted small">Choose your team first.</p>`;
-    return;
-  }
-
-  const includedAssets = meRoster.assets
-    .filter((asset) => state.selectedOutgoingAssetIds.has(asset.assetId))
-    .sort((a, b) => sortAssetsByValueDesc(a, b, state.values));
-
-  if (includedAssets.length === 0) {
-    el.selectedAssetsList.innerHTML = `<p class="muted small">No included assets selected yet.</p>`;
-    return;
-  }
-
-  const chipRow = document.createElement("div");
-  chipRow.className = "selection-chip-row";
-
-  for (const asset of includedAssets) {
-    const chip = document.createElement("button");
-    chip.type = "button";
-    chip.className = "selection-chip";
-    chip.innerHTML = `
-      <span class="selection-chip-label">${asset.name}</span>
-      <span class="selection-chip-action">Remove</span>
-    `;
-    chip.addEventListener("click", () => toggleOutgoingAsset(asset.assetId));
-    chipRow.appendChild(chip);
-  }
-
-  el.selectedAssetsList.appendChild(chipRow);
-}
-
-function renderExcludedOutgoingAssets(meRoster = getMyRoster()) {
-  if (!el.excludedAssetsList) return;
-
-  el.excludedAssetsList.innerHTML = "";
-
-  if (!meRoster) {
-    el.excludedAssetsList.innerHTML = `<p class="muted small">Choose your team first.</p>`;
-    return;
-  }
-
-  const protectedAssets = meRoster.assets
-    .filter((asset) => state.excludedOutgoingAssetIds.has(asset.assetId))
-    .sort((a, b) => sortAssetsByValueDesc(a, b, state.values));
-
-  if (protectedAssets.length === 0) {
-    el.excludedAssetsList.innerHTML = `<p class="muted small">No excluded assets selected yet.</p>`;
-    return;
-  }
-
-  const chipRow = document.createElement("div");
-  chipRow.className = "selection-chip-row";
-
-  for (const asset of protectedAssets) {
-    const chip = document.createElement("button");
-    chip.type = "button";
-    chip.className = "selection-chip";
-    chip.innerHTML = `
-      <span class="selection-chip-label">${asset.name}</span>
-      <span class="selection-chip-action">Remove</span>
-    `;
-    chip.addEventListener("click", () => removeExcludedOutgoingAsset(asset.assetId));
-    chipRow.appendChild(chip);
-  }
-
-  el.excludedAssetsList.appendChild(chipRow);
-}
-
-function updateSelectedAssetsSummary() {
-  if (!el.selectedAssetsSummary) return;
-
-  const count = state.selectedOutgoingAssetIds.size;
-  const includeEnabled = Boolean(el.includeAssetsToggle?.checked);
-  el.selectedAssetsSummary.textContent = !includeEnabled
-    ? "Leave this off unless you want every offer to include specific assets."
-    : count > 0
-      ? `Every offer will include these ${count} selected asset${count === 1 ? "" : "s"}, and the generator can add more if needed.`
-      : "Turn this on if you want every offer to include specific assets you choose.";
-  if (el.includeAssetsSummaryLabel) {
-    el.includeAssetsSummaryLabel.textContent = count > 0
-      ? `${count} asset${count === 1 ? "" : "s"} selected`
-      : "Select players or picks";
-  }
-  renderSessionSnapshot();
-}
-
-function updateExcludedAssetsSummary() {
-  if (!el.excludedAssetsSummary) return;
-
-  const count = state.excludedOutgoingAssetIds.size;
-  const excludeEnabled = Boolean(el.excludeAssetsToggle?.checked);
-  el.excludedAssetsSummary.textContent = !excludeEnabled
-    ? "Leave this off unless you want to keep specific assets out of every offer."
-    : count > 0
-      ? `${count} asset${count === 1 ? "" : "s"} will stay out of every generated idea.`
-      : "Choose any players or picks you do not want to move.";
-  if (el.excludeAssetsSummaryLabel) {
-    el.excludeAssetsSummaryLabel.textContent = count > 0
-      ? `${count} asset${count === 1 ? "" : "s"} excluded`
-      : "Select players or picks";
-  }
-  renderSessionSnapshot();
-}
-
-function buildAssetSelectLabel(asset) {
-  const details = [];
-  if (asset.assetType === "player") {
-    const position = formatPlayerPositionLabel(asset);
-    if (position) details.push(position);
-    if (asset.raw?.team) details.push(asset.raw.team);
-  }
-  if (asset.assetType === "pick") {
-    if (asset.raw?.season) details.push(String(asset.raw.season));
-    if (asset.raw?.round) details.push(`R${asset.raw.round}`);
-  }
-  return details.length > 0 ? `${asset.name} - ${details.join(" - ")}` : asset.name;
 }
 
 function buildAssetPickerMarkup(asset, { values, contextLabel } = {}) {
@@ -1368,33 +825,16 @@ async function generateTradeIdeas() {
     alert("Select one of your own assets to shop first.");
     return;
   }
-  if (mode === "multi-custom") {
-    const customValidation = validateCustomMultiTeamSetup();
-    if (!customValidation.ok) {
-      alert(customValidation.message);
-      return;
-    }
-  }
-  if (el.includeAssetsToggle?.checked && state.selectedOutgoingAssetIds.size === 0) {
-    alert("Choose at least one player or pick to anchor offers around, or turn that option off.");
-    return;
-  }
 
   const fairnessPct = DEFAULT_FAIRNESS_PCT;
-  const maxResults = clamp(Number(el.maxResultsInput?.value || 3), 1, 6);
+  const maxResults = DEFAULT_MAX_RESULTS;
   const tradeLab = getTradeLabSettings();
 
   try {
     setButtonLoading(el.generateBtn, true, "Building trade ideas...");
     await ensureValuesLoaded("");
     await waitForNextPaint();
-    const leagueStrengthBaseline = mode === "multi-custom"
-      ? null
-      : buildLeagueStrengthBaseline({
-        league: state.league,
-        rosters: state.normalizedRosters,
-        values: state.values,
-      });
+    const leagueStrengthBaseline = null;
     let resultPayload = null;
 
     if (mode === "acquire") {
@@ -1423,8 +863,8 @@ async function generateTradeIdeas() {
         tradeLab,
         leagueStrengthBaseline,
       });
-    } else if (mode === "multi-custom") {
-      resultPayload = generateCustomMultiTeamIdeas({
+    } else if (mode === "surprise") {
+      resultPayload = generateSurpriseBlockbusterIdeas({
         meRoster,
         values: state.values,
         fairnessPct,
@@ -1456,6 +896,7 @@ async function generateTradeIdeas() {
     alert(`Could not load valuation source. ${err.message}`);
   } finally {
     setButtonLoading(el.generateBtn, false);
+    syncGenerateState();
   }
 }
 
@@ -1467,16 +908,18 @@ function enrichTradeIdea({ idea, myRoster, theirRoster, values, leagueStrengthBa
       values,
       state.valueNameMap
     ),
-    impactAnalysis: buildTradeImpactAnalysis({
-      baseline: leagueStrengthBaseline,
-      league: state.league,
-      rosters: state.normalizedRosters,
-      myRoster,
-      theirRoster,
-      myAssets: idea.myAssets,
-      theirAssets: idea.theirAssets,
-      values,
-    }),
+    impactAnalysis: leagueStrengthBaseline
+      ? buildTradeImpactAnalysis({
+        baseline: leagueStrengthBaseline,
+        league: state.league,
+        rosters: state.normalizedRosters,
+        myRoster,
+        theirRoster,
+        myAssets: idea.myAssets,
+        theirAssets: idea.theirAssets,
+        values,
+      })
+      : null,
   };
 }
 
@@ -1526,9 +969,9 @@ function buildResultsSubtitle({ mode, meRoster, tradeLab, payload }) {
   if (mode === "shop") {
     return `${meRoster.manager.displayName} shopping ${payload?.focusAsset?.name || "one asset"} across the league${suffix}`;
   }
-  if (mode === "multi-custom") {
+  if (mode === "surprise") {
     const participantCount = payload?.teamCount || 0;
-    return `${meRoster.manager.displayName} exploring ${participantCount}-team blockbuster ideas${suffix}`;
+    return `${meRoster.manager.displayName} exploring automatic ${participantCount}-team blockbusters${suffix}`;
   }
   return `${meRoster.manager.displayName} targeting ${payload?.focusAsset?.name || "a target"} from ${payload?.primaryCounterpartyName || "another manager"}${suffix}`;
 }
@@ -1539,8 +982,8 @@ function buildNoIdeasMessage(tradeLab, mode = "acquire") {
   if (tradeLab.excludedOutgoingAssetIds.size > 0) advice.push("exclude fewer assets");
   if (mode === "shop") {
     advice.push("shop a different asset");
-  } else if (mode === "multi-custom") {
-    advice.push("change the selected owners");
+  } else if (mode === "surprise") {
+    advice.push("try again after values finish loading");
   } else {
     advice.push("change the target");
   }
@@ -1653,11 +1096,13 @@ function renderMultiTeamPartyCard(participant, values, meRosterId) {
   `;
 }
 
+function formatAssetNameList(assets) {
+  return assets.map((asset) => asset.name).join(", ");
+}
+
 function renderTradeCard(idea, index, values) {
   const evenValueLabel = formatEvenValueDisplay(idea);
   const isInitiallyOpen = index === 0;
-  const marketLabel = idea.marketMetricLabel || "you";
-  const marketOtherLabel = idea.marketMetricOtherLabel || "them";
   return `
     <details class="trade-card" ${isInitiallyOpen ? "open" : ""}>
       <summary class="trade-card-summary">
@@ -1665,7 +1110,7 @@ function renderTradeCard(idea, index, values) {
           <h3>Idea ${index + 1}</h3>
           ${idea.counterpartyName ? `<p class="trade-card-context">with ${idea.counterpartyName}</p>` : ""}
           <p class="trade-card-preview">
-            ${idea.myAssets.length} send • ${idea.theirAssets.length} receive • even-up ${evenValueLabel}
+            Send ${formatAssetNameList(idea.myAssets)} for ${formatAssetNameList(idea.theirAssets)}
           </p>
         </div>
         <span class="trade-card-toggle" aria-hidden="true"></span>
@@ -1689,23 +1134,18 @@ function renderTradeCard(idea, index, values) {
         </div>
         <div class="trade-metrics">
           <div class="trade-metric">
-            <strong>KTC balance</strong>
-            you ${formatNumber(idea.myAdjustedValue)} vs them ${formatNumber(idea.theirAdjustedValue)} (${idea.pctDiff}% diff)
+            <strong>Adjusted value</strong>
+            you ${formatNumber(idea.myAdjustedValue)} vs them ${formatNumber(idea.theirAdjustedValue)} (${idea.pctDiff}% apart)
           </div>
           <div class="trade-metric">
-            <strong>Market fit</strong>
-            ${marketLabel} ${formatNumber(idea.marketMyValue)} vs ${marketOtherLabel} ${formatNumber(idea.marketTheirValue)} (${idea.marketDelta >= 0 ? "+" : ""}${formatNumber(idea.marketDelta)})
-          </div>
-          <div class="trade-metric">
-            <strong>Package adjustment</strong>
-            ${formatPackageAdjustment(idea)}
+            <strong>Elite premium</strong>
+            Top players are weighted above raw KTC package value.
           </div>
           <div class="trade-metric">
             <strong>Even-up value</strong>
             ${evenValueLabel}
           </div>
         </div>
-        ${idea.impactAnalysis ? renderImpactAnalysis(idea.impactAnalysis, values) : ""}
       </div>
     </details>
   `;
@@ -2504,10 +1944,9 @@ function generateAcquisitionIdeaBuckets({
   leagueStrengthBaseline,
 }) {
   const targetValue = getAssetValue(targetAsset, values);
-  const groups = getRequestedTierIds().map((tierId) => {
-    const copy = getTradeTierCopy(tierId, "acquire", targetAsset.name);
-    const ideas = [];
+  const ideas = [];
 
+  for (const tierId of ["level-up", "even", "break-down"]) {
     for (const plan of getAcquisitionTierPlans(tierId)) {
       const searchContext = buildTradeSearchContext({
         myRoster: meRoster,
@@ -2526,7 +1965,7 @@ function generateAcquisitionIdeaBuckets({
           targetAsset,
           values,
           fairnessPct,
-          maxResults: maxResults * 5,
+          maxResults: maxResults * 6,
           allowExtraTargetAssets: plan.allowExtraTargetAssets,
           requireExtraTargetAsset: plan.requireExtraTargetAsset,
           maxExtraTargetAssets: plan.maxExtraTargetAssets,
@@ -2541,33 +1980,31 @@ function generateAcquisitionIdeaBuckets({
         }))
       );
     }
+  }
 
-    const finalizedIdeas = selectDiverseTradeIdeas(
-      dedupeTwoTeamIdeas(ideas)
-        .filter((idea) => classifyTwoTeamTradeTier(idea, targetAsset, values, { mode: "acquire" }) === tierId)
-        .sort((a, b) => compareTradeIdeas(a, b)),
-      maxResults,
-      values,
-      tradeLab.selectedOutgoingAssetIds
-    ).map((idea) => enrichTradeIdea({
-      idea,
-      myRoster: meRoster,
-      theirRoster,
-      values,
-      leagueStrengthBaseline,
-    }));
-
-    return {
-      ...copy,
-      ideas: finalizedIdeas,
-    };
-  });
+  const finalizedIdeas = selectDiverseTradeIdeas(
+    dedupeTwoTeamIdeas(ideas).sort((a, b) => compareTradeIdeas(a, b)),
+    maxResults,
+    values,
+    tradeLab.selectedOutgoingAssetIds
+  ).map((idea) => enrichTradeIdea({
+    idea,
+    myRoster: meRoster,
+    theirRoster,
+    values,
+    leagueStrengthBaseline,
+  }));
 
   return {
     kind: "two-team",
     focusAsset: targetAsset,
     primaryCounterpartyName: theirRoster.manager.displayName,
-    groups,
+    groups: [{
+      title: "Best Trade Ideas",
+      subtitle: `Simple offers for ${targetAsset.name}.`,
+      emptyText: "No trade ideas fit the current setup.",
+      ideas: finalizedIdeas,
+    }],
     referenceValue: targetValue,
   };
 }
@@ -2664,37 +2101,37 @@ function generateShopIdeaBuckets({
     });
   });
 
-  const groups = getRequestedTierIds().map((tierId) => {
-    const copy = getTradeTierCopy(tierId, "shop", shopAsset.name);
-    const ideas = selectDiverseTradeIdeas(
-      dedupeTwoTeamIdeas(tierBuckets[tierId])
-        .sort((a, b) => compareTradeIdeas(a, b)),
-      maxResults,
+  const ideas = selectDiverseTradeIdeas(
+    dedupeTwoTeamIdeas([
+      ...tierBuckets["level-up"],
+      ...tierBuckets.even,
+      ...tierBuckets["break-down"],
+    ]).sort((a, b) => compareTradeIdeas(a, b)),
+    maxResults,
+    values,
+    new Set([shopAsset.assetId])
+  ).map((idea) => {
+    const theirRoster = state.normalizedRosters.find((roster) => roster.rosterId === idea.counterpartyRosterId);
+    if (!theirRoster) return idea;
+    return enrichTradeIdea({
+      idea,
+      myRoster: meRoster,
+      theirRoster,
       values,
-      new Set([shopAsset.assetId])
-    ).map((idea) => {
-      const theirRoster = state.normalizedRosters.find((roster) => roster.rosterId === idea.counterpartyRosterId);
-      if (!theirRoster) return idea;
-      return enrichTradeIdea({
-        idea,
-        myRoster: meRoster,
-        theirRoster,
-        values,
-        leagueStrengthBaseline,
-      });
+      leagueStrengthBaseline,
     });
-
-    return {
-      ...copy,
-      ideas,
-    };
   });
 
   return {
     kind: "two-team",
     focusAsset: shopAsset,
     primaryCounterpartyName: "the rest of the league",
-    groups,
+    groups: [{
+      title: "Best Trade Ideas",
+      subtitle: `Best return packages for ${shopAsset.name}.`,
+      emptyText: "No trade ideas fit the current setup.",
+      ideas,
+    }],
   };
 }
 
@@ -2975,6 +2412,133 @@ function generateCustomMultiTeamIdeas({
   };
 }
 
+function generateSurpriseBlockbusterIdeas({
+  meRoster,
+  values,
+  fairnessPct,
+  maxResults,
+  tradeLab,
+}) {
+  const partnerCount = DEFAULT_MULTI_TEAM_COUNT - 1;
+  const otherRosters = state.normalizedRosters.filter((roster) => roster.rosterId !== meRoster.rosterId);
+  if (otherRosters.length < partnerCount) {
+    return {
+      kind: "multi-team",
+      teamCount: 0,
+      groups: [{
+        title: "Surprise Blockbusters",
+        subtitle: "Automatic multi-team search",
+        emptyText: "This league needs at least three teams for a surprise blockbuster.",
+        ideas: [],
+      }],
+    };
+  }
+
+  const participantSets = selectSurpriseBlockbusterParticipantSets({
+    otherRosters,
+    values,
+    partnerCount,
+    limit: Math.max(8, maxResults * 4),
+  });
+  const ideas = [];
+
+  participantSets.forEach((participantSet) => {
+    const participantRosters = [meRoster, ...participantSet.rosters];
+    const anchorPlans = buildCustomMultiTeamAnchorPlans({
+      meRoster,
+      participantRosters,
+      values,
+      maxPlanCount: Math.max(6, maxResults * 3),
+    });
+
+    anchorPlans.slice(0, Math.max(4, maxResults * 2)).forEach((plan) => {
+      ideas.push(
+        ...buildMultiTeamIdeasFromAnchors({
+          meRoster,
+          participantRosters: plan.participantRosters,
+          anchorTransfers: plan.anchorTransfers,
+          values,
+          fairnessPct,
+          maxResults,
+          tradeLab,
+          focusLabel: "surprise blockbuster",
+        })
+      );
+    });
+  });
+
+  const dedupedIdeas = dedupeMultiTeamIdeas(ideas)
+    .sort((a, b) => compareMultiTeamIdeas(a, b))
+    .slice(0, maxResults);
+
+  return {
+    kind: "multi-team",
+    teamCount: DEFAULT_MULTI_TEAM_COUNT,
+    groups: [{
+      title: "Surprise Blockbusters",
+      subtitle: "Automatic multi-team ideas. No extra setup.",
+      emptyText: participantSets.length === 0
+        ? "Could not find enough high-value assets across the league."
+        : "No surprise blockbuster stayed close enough to fair value.",
+      ideas: dedupedIdeas,
+    }],
+  };
+}
+
+function selectSurpriseBlockbusterParticipantSets({
+  otherRosters,
+  values,
+  partnerCount,
+  limit,
+}) {
+  const scoredRosters = otherRosters
+    .map((roster) => ({
+      roster,
+      score: scoreSurpriseBlockbusterRoster(roster, values),
+      topValue: getRosterTopTradeAssetValue(roster, values),
+    }))
+    .filter((entry) => entry.topValue >= 900)
+    .sort((a, b) => b.score - a.score || a.roster.manager.displayName.localeCompare(b.roster.manager.displayName))
+    .slice(0, Math.max(6, limit + partnerCount));
+
+  return combinationsOfSize(scoredRosters, partnerCount)
+    .map((combo) => {
+      const topValues = combo.map((entry) => entry.topValue);
+      const maxTopValue = Math.max(...topValues);
+      const minTopValue = Math.min(...topValues);
+      const spreadPenalty = (maxTopValue - minTopValue) * 0.16;
+      return {
+        rosters: combo.map((entry) => entry.roster),
+        score: combo.reduce((sum, entry) => sum + entry.score, 0) - spreadPenalty,
+      };
+    })
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit);
+}
+
+function scoreSurpriseBlockbusterRoster(roster, values) {
+  const entries = roster.assets
+    .filter(isTradeEligibleAsset)
+    .map((asset) => ({ asset, value: getAssetValue(asset, values) }))
+    .filter((entry) => Number.isFinite(entry.value) && entry.value > 0)
+    .sort((a, b) => b.value - a.value || a.asset.name.localeCompare(b.asset.name));
+
+  if (entries.length === 0) return 0;
+
+  const top = entries[0]?.value || 0;
+  const second = entries[1]?.value || 0;
+  const third = entries[2]?.value || 0;
+  const firstRoundPickBonus = entries.slice(0, 10).filter((entry) => isFirstRoundPick(entry.asset)).length * 160;
+  const youthBonus = entries.slice(0, 8).filter((entry) => isYouthAsset(entry.asset)).length * 70;
+  return top * 0.9 + second * 0.34 + third * 0.16 + firstRoundPickBonus + youthBonus;
+}
+
+function getRosterTopTradeAssetValue(roster, values) {
+  return roster.assets
+    .filter(isTradeEligibleAsset)
+    .reduce((maxValue, asset) => Math.max(maxValue, getAssetValue(asset, values) || 0), 0);
+}
+
 function getCustomMultiTeamAnchorCandidateLimit(participantCount) {
   if (participantCount >= 6) return 1;
   if (participantCount >= 5) return 2;
@@ -3007,7 +2571,7 @@ function scoreCustomMultiTeamAnchorCandidate({
   if (asset.assetType === "pick") score += isFirstRoundPick(asset) ? 190 : 110;
   if (isYouthAsset(asset)) score += 85;
   if (isVeteranAsset(asset)) score -= 40;
-  if (isMyRoster && el.includeAssetsToggle?.checked && state.selectedOutgoingAssetIds.has(asset.assetId)) score += 260;
+  if (isMyRoster && state.selectedOutgoingAssetIds.has(asset.assetId)) score += 260;
 
   return score;
 }
@@ -5366,7 +4930,7 @@ function buildOutgoingPackageVariantsForCommonValue({
 }) {
   if (!roster || !anchorAsset) return [];
 
-  const requiredExtraAssetIds = participantIsMe && el.includeAssetsToggle?.checked
+  const requiredExtraAssetIds = participantIsMe
     ? [...state.selectedOutgoingAssetIds].filter((assetId) => assetId !== anchorAsset.assetId && !state.excludedOutgoingAssetIds.has(assetId))
     : [];
   const supplementPool = buildSupplementAssetPool({
@@ -6338,14 +5902,23 @@ function formatNumber(value) {
 
 function getAssetValue(asset, values) {
   const exact = values[asset.assetId];
-  if (Number.isFinite(exact)) return exact;
+  if (Number.isFinite(exact)) return applyElitePlayerValuePremium(asset, exact);
 
   if (asset.assetType === "pick") {
     const resolvedPickValue = resolvePickAssetValue(asset, values);
     if (Number.isFinite(resolvedPickValue)) return resolvedPickValue;
   }
 
-  return estimatedValue(asset);
+  return applyElitePlayerValuePremium(asset, estimatedValue(asset));
+}
+
+function applyElitePlayerValuePremium(asset, baseValue) {
+  if (asset?.assetType !== "player" || !Number.isFinite(baseValue)) return baseValue;
+
+  const premiumTier = ELITE_VALUE_PREMIUM_TIERS.find((tier) => baseValue >= tier.floor);
+  if (!premiumTier) return baseValue;
+
+  return Math.round(baseValue * premiumTier.multiplier);
 }
 
 function formatAssetSecondaryLabel(asset, values) {
@@ -6994,7 +6567,6 @@ function applyValuationBundle(bundle, { rerender = true } = {}) {
 
   if (rerender) {
     renderPlayerSearch();
-    renderOutgoingAssetSearch();
   }
 
   return {

@@ -3,10 +3,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 KTC_RAW_BASE = 0.10
-KTC_RAW_ELITE_WEIGHT = 0.04
-KTC_RAW_TRADE_WEIGHT = 0.09
-KTC_RAW_DEPTH_WEIGHT = 0.24
+KTC_RAW_ELITE_WEIGHT = 0.08
+KTC_RAW_TRADE_WEIGHT = 0.11
+KTC_RAW_DEPTH_WEIGHT = 0.18
 KTC_GLOBAL_MAX_FALLBACK = 9999
+ELITE_VALUE_PREMIUM_TIERS = (
+    (9000, 1.32),
+    (8000, 1.27),
+    (7000, 1.21),
+    (6000, 1.15),
+    (5000, 1.09),
+)
 
 
 @dataclass
@@ -29,18 +36,28 @@ class PackageAdjustmentResult:
 class ValuationService:
     def __init__(self, values: dict[str, int]):
         self._values = values
-        self._max_value = max(max(values.values(), default=0), KTC_GLOBAL_MAX_FALLBACK)
+        adjusted_values = [self._apply_elite_player_premium(asset_id, value) for asset_id, value in values.items()]
+        self._max_value = max(max(adjusted_values, default=0), KTC_GLOBAL_MAX_FALLBACK)
 
     def get_asset_value(self, asset_id: str) -> int | None:
         exact = self._values.get(asset_id)
         if exact is not None:
-            return exact
+            return self._apply_elite_player_premium(asset_id, exact)
 
         if asset_id.startswith("pick:"):
             any_id = asset_id.rsplit(":", 1)[0] + ":any"
             return self._values.get(any_id)
 
         return None
+
+    def _apply_elite_player_premium(self, asset_id: str, base_value: int) -> int:
+        if not asset_id.startswith("player:"):
+            return base_value
+
+        for floor, multiplier in ELITE_VALUE_PREMIUM_TIERS:
+            if base_value >= floor:
+                return round(base_value * multiplier)
+        return base_value
 
     def get_many(self, asset_ids: list[str]) -> list[ValuationResult]:
         return [ValuationResult(asset_id=a, value=self.get_asset_value(a)) for a in asset_ids]

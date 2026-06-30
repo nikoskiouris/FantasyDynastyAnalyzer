@@ -12,24 +12,18 @@ The full UI lives in `docs/` and is deployable on GitHub Pages.
 ### User flow in the website
 1. Enter Sleeper League ID.
 2. Pick which manager you are.
-3. Choose a trade mode:
-   - go get a player or pick from another roster
-   - shop one of your own assets across the league
-   - route a target through a multi-team trade
-   - pick the owners in a custom multi-team trade and let the solver generate blockbuster ideas
-4. Pick the trade tier you want to explore:
-   - `level up`
-   - `trade even`
-   - `break down`
-5. Search/select the player, pick, or your own asset that you want to build around, unless you are using the selected-owner multi-team builder.
-6. Build your outgoing pool by allowing `players`, `picks`, or both, and optionally hand-pick exact assets you are willing to move.
-7. Tell the app how your league behaves with Trade Lab settings like position premiums, team direction, and trade vibe.
-8. Generate tiered trade ideas or full multi-team structures that stay close to market.
+3. Choose one simple trade mode:
+   - shop one of your own players or picks across the league
+   - target a player or pick from another roster
+   - generate a surprise multi-team blockbuster
+4. Search/select the player or pick when the selected mode needs one.
+5. Generate a short ranked list of trade ideas.
 
 ### Value source behavior
 - Uses optional JSON endpoint if you provide one (shape: `[{"asset_id":"player:8155","value":8200}]`).
 - Falls back to repo sample values in `docs/data/ktc_values_sample.csv`.
 - For assets missing values, uses a lightweight position/age estimate so the UI can still produce suggestions.
+- Applies an extra premium to high-end players so one elite asset is not valued like an interchangeable pile of smaller pieces.
 - Draft picks are labeled with their original owner when Sleeper provides it, and will also show prior-season PF finish when the linked previous league is available.
 
 ## GitHub Pages deployment
