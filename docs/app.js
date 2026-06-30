@@ -360,6 +360,17 @@ function renderSessionSnapshot() {
   }
 }
 
+function scrollLoadedWorkspaceIntoView() {
+  if (!el.identitySection || el.identitySection.classList.contains("hidden")) return;
+  requestAnimationFrame(() => {
+    if (window.matchMedia?.("(max-width: 720px)").matches) {
+      window.scrollTo({ top: 0, behavior: "smooth" });
+      return;
+    }
+    el.identitySection.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
+}
+
 function syncTradeModeUi() {
   const mode = getTradeMode();
   const searchEnabled = mode !== "surprise";
@@ -471,6 +482,7 @@ async function loadLeague() {
     showAppPages();
     renderPowerDashboard();
     renderLeagueAnalyticsDashboard();
+    scrollLoadedWorkspaceIntoView();
     setStatus(`Loaded ${state.leagueName}. Player names are still syncing...`, { loading: true });
     primeValuationData();
     loadTrendingPlayers();
